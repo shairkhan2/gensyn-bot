@@ -413,7 +413,7 @@ async def list_users(message: Message):
         except:
             # Fallback to stored data
             username = user_data.get("username", "")
-            name = f"{user_data.get("first_name", '')} {user_data.get("last_name", '')}".strip()
+            name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
         
         display_name = f"{name} {username}".strip()
         if not display_name:
