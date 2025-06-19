@@ -33,9 +33,12 @@ find . -name "*.py" -exec dos2unix {} \;
 dos2unix *.sh || true
 
 # Install required Python modules
-echo "🐍 Installing Python modules..."
-pip3 install --upgrade pip
-pip3 install pyTelegramBotAPI
+echo "🐍 Installing Python modules in venv..."
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install pyTelegramBotAPI
+
 
 echo "✅ Python dependencies installed."
 
