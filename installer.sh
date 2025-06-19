@@ -39,7 +39,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 pip install pyTelegramBotAPI
-
+pip install telebot
 
 
 echo "✅ Python dependencies installed."
