@@ -14,8 +14,7 @@ wireguard
 net-tools
 dos2unix
 
-Optional: if using screen
-sudo apt install -y screen
+...
 
 echo "✅ System packages installed."
 
