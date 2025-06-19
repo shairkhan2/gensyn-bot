@@ -6,6 +6,7 @@ import subprocess
 BOT_CONFIG = "/root/bot_config.env"
 CONFIG_FILE = "/root/vm_registry.json"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
+BOT_PATH = "/root/gensyn-bot/bot.py"
 
 # Setup section
 
@@ -18,6 +19,7 @@ def menu():
         print("4. Exit")
         print("5. Start Bot")
         print("6. Stop Bot")
+        print("7. View Bot Logs")
         choice = input("\nSelect an option: ")
 
         if choice == "1":
@@ -32,6 +34,8 @@ def menu():
             start_bot()
         elif choice == "6":
             stop_bot()
+        elif choice == "7":
+            os.system("journalctl -u bot -f")
         else:
             print("❌ Invalid option.")
 
@@ -61,21 +65,27 @@ def setup_bot():
         f.write(f"USER_ID={user_id}\n")
         f.write(f"VM_NAME={vm_name}\n")
 
-    if not os.path.exists("/root/bot.py"):
-        os.system("cp ./default_bot.py /root/bot.py")
-        os.system("chmod +x /root/bot.py")
+    if not os.path.exists(BOT_PATH):
+        os.system("cp ./default_bot.py /root/gensyn-bot/bot.py")
+        os.system(f"chmod +x {BOT_PATH}")
 
     print("✅ Bot config saved and default bot.py is ready.")
 
 def start_bot():
     print("🚀 Launching bot in background...")
-    os.system("nohup python3 /root/bot.py > /root/bot.log 2>&1 &")
-    print("✅ Bot started. Logs: /root/bot.log")
+    if os.system(f"pgrep -f '{BOT_PATH}' > /dev/null") == 0:
+        print("⚠️ Bot is already running.")
+    else:
+        os.system(f"nohup python3 {BOT_PATH} > /root/bot.log 2>&1 &")
+        print("✅ Bot started. Logs: /root/bot.log")
 
 def stop_bot():
     print("🛑 Stopping bot...")
-    os.system("pkill -f /root/bot.py")
-    print("✅ Bot stopped.")
+    if os.system(f"pgrep -f '{BOT_PATH}' > /dev/null") == 0:
+        os.system(f"pkill -f '{BOT_PATH}'")
+        print("✅ Bot stopped.")
+    else:
+        print("ℹ️ Bot is not running.")
 
 def setup_systemd():
     print("\n⚙️ Enabling bot service...")
@@ -84,9 +94,13 @@ Description=VPN Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /root/bot.py
+ExecStart=/usr/bin/python3 {BOT_PATH}
+EnvironmentFile={BOT_CONFIG}
 Restart=always
 User=root
+WorkingDirectory=/root/gensyn-bot
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -96,8 +110,8 @@ WantedBy=multi-user.target
     os.system("systemctl daemon-reexec")
     os.system("systemctl daemon-reload")
     os.system("systemctl enable bot")
-    os.system("systemctl start bot")
-    print("✅ Bot service enabled and running.")
+    os.system("systemctl restart bot")
+    print("✅ Bot service enabled and running via systemd.")
 
 if __name__ == "__main__":
     menu()
