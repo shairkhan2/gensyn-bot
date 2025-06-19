@@ -1,23 +1,52 @@
 #!/bin/bash
 
-echo "🔧 Updating system..."
-apt-get update -y && apt-get upgrade -y
+set -e
 
-echo "🐍 Installing Python 3, venv, and pip..."
-apt-get install -y python3 python3-pip python3-venv
+echo "🔧 Installing dependencies..."
 
-echo "🛡️ Installing WireGuard..."
-apt-get install -y wireguard
+Update and install system packages
+sudo apt update && sudo apt install -y
+python3
+python3-pip
+git
+curl
+wireguard
+net-tools
+dos2unix
 
-echo "📦 Installing required Python packages..."
+Optional: if using screen
+sudo apt install -y screen
+
+echo "✅ System packages installed."
+
+Clone your gensyn-bot repo
+cd /root || exit
+if [ ! -d "gensyn-bot" ]; then
+echo "📥 Cloning gensyn-bot repository..."
+git clone https://github.com/shairkhan2/gensyn-bot.git
+cd gensyn-bot
+else
+echo "📂 gensyn-bot already exists. Pulling latest..."
+cd gensyn-bot
+git pull
+fi
+
+Make sure scripts are Unix formatted
+find . -name "*.py" -exec dos2unix {} ;
+dos2unix *.sh || true
+
+Install required Python modules
+echo "🐍 Installing Python modules..."
+pip3 install --upgrade pip
 pip3 install pyTelegramBotAPI
 
-echo "📁 Creating project directory..."
-mkdir -p /root/vpn-bot
-cd /root/vpn-bot
+echo "✅ Python dependencies installed."
 
-echo "📋 Downloading bot manager script..."
-wget -O bot_manager.py https://raw.githubusercontent.com/shairkhan2/gensyn-bot/main/bot_manager.py || echo "⚠️ Manual copy may be needed."
-
-echo "✅ Setup complete. Run the script using:"
-echo "    python3 bot_manager.py"
+Ask to run manager
+read -p "👉 Do you want to run the bot manager now? (y/n): " RUNNOW
+if [[ "$RUNNOW" == "y" || "$RUNNOW" == "Y" ]]; then
+echo "🚀 Launching bot manager..."
+python3 bot_manager.py
+else
+echo "📌 You can run it later with: python3 /root/gensyn-bot/bot_manager.py"
+fi
