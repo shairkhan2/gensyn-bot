@@ -61,20 +61,20 @@ def setup_bot():
         f.write(f"USER_ID={user_id}\n")
         f.write(f"VM_NAME={vm_name}\n")
 
-    if not os.path.exists("/root/gensyn-bot/bot.py"):
-        os.system("nohup python3 /root/gensyn-bot/bot.py > /root/bot.log 2>&1 &")
-        os.system("chmod +x /root/gensyn-bot/bot.py")
+    if not os.path.exists("/root/bot.py"):
+        os.system("cp ./default_bot.py /root/bot.py")
+        os.system("chmod +x /root/bot.py")
 
     print("✅ Bot config saved and default bot.py is ready.")
 
 def start_bot():
     print("🚀 Launching bot in background...")
-    os.system("nohup python3 /root/gensyn-bot/bot.py" /root/bot.log 2>&1 &")
+    os.system("nohup python3 /root/bot.py > /root/bot.log 2>&1 &")
     print("✅ Bot started. Logs: /root/bot.log")
 
 def stop_bot():
     print("🛑 Stopping bot...")
-    os.system("pkill -f /root/gensyn-bot/bot.py")
+    os.system("pkill -f /root/bot.py")
     print("✅ Bot stopped.")
 
 def setup_systemd():
@@ -84,7 +84,7 @@ Description=VPN Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /root/gensyn-bot/bot.py
+ExecStart=/usr/bin/python3 /root/bot.py
 Restart=always
 User=root
 
@@ -101,4 +101,3 @@ WantedBy=multi-user.target
 
 if __name__ == "__main__":
     menu()
-
