@@ -62,7 +62,7 @@ def setup_bot():
         f.write(f"VM_NAME={vm_name}\n")
 
     if not os.path.exists("/root/gensyn-bot/bot.py"):
-        os.system("nohup python3 /root/gensyn-bot/bot.py > /root/bot.log 2>&1 &")
+        os.system("nohup python3 /root/gensyn-bot/bot.py" /root/bot.log 2>&1 &")
         os.system("chmod +x /root/gensyn-bot/bot.py")
 
     print("✅ Bot config saved and default bot.py is ready.")
