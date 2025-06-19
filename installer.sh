@@ -27,15 +27,14 @@ else
     cd gensyn-bot
     git pull
 fi
-
+python3 -m venv venv
+source venv/bin/activate
 # Make sure scripts are Unix formatted
 find . -name "*.py" -exec dos2unix {} \;
 dos2unix *.sh || true
 
 # Install required Python modules
 echo "🐍 Installing Python modules in venv..."
-python3 -m venv venv
-source venv/bin/activate
 pip install --upgrade pip
 pip install pyTelegramBotAPI
 
