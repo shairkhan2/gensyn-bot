@@ -1,6 +1,5 @@
 import os
 import time
-import json
 import threading
 import subprocess
 import logging
@@ -9,11 +8,11 @@ from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_CONFIG = "/root/bot_config.env"
-CONFIG_FILE = "/root/vm_registry.json"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 
 logging.basicConfig(filename='/root/bot_error.log', level=logging.ERROR)
 
+# Load bot config
 with open(BOT_CONFIG) as f:
     lines = f.read().strip().split("\n")
     config = dict(line.split("=", 1) for line in lines if "=" in line)
@@ -21,22 +20,8 @@ with open(BOT_CONFIG) as f:
 BOT_TOKEN = config["BOT_TOKEN"]
 USER_ID = int(config["USER_ID"])
 VM_NAME = config["VM_NAME"]
-ACTIVE_VM = VM_NAME
 
 bot = TeleBot(BOT_TOKEN)
-
-if not os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump({VM_NAME: True}, f)
-else:
-    with open(CONFIG_FILE, "r") as f:
-        try:
-            vms = json.load(f)
-        except json.JSONDecodeError:
-            vms = {}
-    vms[VM_NAME] = True
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(vms, f)
 
 def get_menu():
     markup = InlineKeyboardMarkup()
@@ -46,44 +31,21 @@ def get_menu():
         InlineKeyboardButton("📴 VPN OFF", callback_data="vpn_off")
     )
     markup.add(
-        InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status")  # ✅ added button
+        InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status")
     )
     return markup
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
-        bot.send_message(message.chat.id, f"🤖 {VM_NAME} ready. Use /switch {VM_NAME} to activate it.", reply_markup=get_menu())
-
-@bot.message_handler(commands=['switch'])
-def switch_vm(message):
-    global ACTIVE_VM
-    if message.from_user.id != USER_ID:
-        return
-    parts = message.text.strip().split()
-    if len(parts) == 2:
-        new_vm = parts[1]
-        ACTIVE_VM = new_vm
-        bot.send_message(message.chat.id, f"✅ Switched to VM: {ACTIVE_VM}", reply_markup=get_menu())
+        bot.send_message(message.chat.id, f"🤖 {VM_NAME} ready.", reply_markup=get_menu())
 
 @bot.message_handler(commands=['who'])
 def who_handler(message):
     if message.from_user.id == USER_ID:
-        bot.send_message(message.chat.id, f"👤 Current active VM: {ACTIVE_VM}")
+        bot.send_message(message.chat.id, f"👤 This VM: {VM_NAME}")
 
-@bot.message_handler(commands=['list'])
-def list_handler(message):
-    if message.from_user.id != USER_ID:
-        return
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            vms = json.load(f)
-        vm_list = '\n'.join(f"• {vm}" for vm in vms)
-        bot.send_message(message.chat.id, f"📜 Registered VMs:\n{vm_list}")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Error reading VM list: {str(e)}")
-
-@bot.message_handler(commands=['gensyn_status'])  # ✅ added command
+@bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
     if message.from_user.id != USER_ID:
         return
@@ -98,7 +60,7 @@ def gensyn_status_handler(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    if call.from_user.id != USER_ID or ACTIVE_VM != VM_NAME:
+    if call.from_user.id != USER_ID:
         return
 
     if call.data == 'check_ip':
@@ -116,7 +78,7 @@ def callback_query(call):
         subprocess.run(['wg-quick', 'down', 'wg0'])
         bot.send_message(call.message.chat.id, '❌ VPN disabled')
 
-    elif call.data == 'gensyn_status':  # ✅ added callback handler
+    elif call.data == 'gensyn_status':
         try:
             response = requests.get("http://localhost:3000", timeout=3)
             if response.ok:
@@ -154,10 +116,13 @@ def monitor():
 
         time.sleep(60)
 
+# Start monitor thread
 threading.Thread(target=monitor, daemon=True).start()
 
+# Start polling
 try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
