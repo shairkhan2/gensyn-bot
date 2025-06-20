@@ -45,6 +45,9 @@ def get_menu():
         InlineKeyboardButton("📶 VPN ON", callback_data="vpn_on"),
         InlineKeyboardButton("📴 VPN OFF", callback_data="vpn_off")
     )
+    markup.add(
+        InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status")  # ✅ added button
+    )
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -80,6 +83,19 @@ def list_handler(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Error reading VM list: {str(e)}")
 
+@bot.message_handler(commands=['gensyn_status'])  # ✅ added command
+def gensyn_status_handler(message):
+    if message.from_user.id != USER_ID:
+        return
+    try:
+        response = requests.get("http://localhost:3000", timeout=3)
+        if response.ok:
+            bot.send_message(message.chat.id, "✅ Gensyn running")
+        else:
+            bot.send_message(message.chat.id, "❌ Gensyn not running (bad response)")
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Gensyn not running")
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     if call.from_user.id != USER_ID or ACTIVE_VM != VM_NAME:
@@ -99,6 +115,16 @@ def callback_query(call):
     elif call.data == 'vpn_off':
         subprocess.run(['wg-quick', 'down', 'wg0'])
         bot.send_message(call.message.chat.id, '❌ VPN disabled')
+
+    elif call.data == 'gensyn_status':  # ✅ added callback handler
+        try:
+            response = requests.get("http://localhost:3000", timeout=3)
+            if response.ok:
+                bot.send_message(call.message.chat.id, "✅ Gensyn running")
+            else:
+                bot.send_message(call.message.chat.id, "❌ Gensyn not running (bad response)")
+        except Exception:
+            bot.send_message(call.message.chat.id, "❌ Gensyn not running")
 
 def monitor():
     previous_ip = ''
@@ -134,3 +160,4 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
