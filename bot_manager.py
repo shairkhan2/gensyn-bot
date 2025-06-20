@@ -68,22 +68,18 @@ def setup_bot():
     print("✅ Bot config saved and default bot.py is ready.")
 
 def start_bot():
-    print("🚀 Launching bot in background...")
+    print("🚀 Installing dependencies and launching bot in a screen session...")
 
-    if not os.path.exists(VENV_PATH):
-        print("🔧 Creating virtual environment...")
-        os.system(f"python3 -m venv {VENV_PATH}")
-        os.system(f"{VENV_PATH}/bin/pip install --upgrade pip")
+    # Install pyTelegramBotAPI system-wide
+    os.system("pip install pyTelegramBotAPI --break-system-packages")
 
-    # Ensure pyTelegramBotAPI is installed even if venv exists
-    os.system(f"{VENV_PATH}/bin/pip install pyTelegramBotAPI")
+    # Kill existing screen session if running
+    os.system("screen -S vpn_bot -X quit")
 
-    # Check if the bot is already running
-    if os.system(f"pgrep -f '{PYTHON_BIN} {BOT_PATH}' > /dev/null") == 0:
-        print("⚠️ Bot is already running.")
-    else:
-        os.system(f"nohup {PYTHON_BIN} {BOT_PATH} > /root/bot.log 2>&1 &")
-        print("✅ Bot started using virtual environment. Logs: /root/bot.log")
+    # Start a new screen session running the bot
+    os.system("screen -dmS vpn_bot bash -c 'python3 /root/gensyn-bot/bot.py'")
+    print("✅ Bot started in screen session named 'vpn_bot'. Use: screen -r vpn_bot")
+
 
 def stop_bot():
     print("🛑 Stopping bot...")
