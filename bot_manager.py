@@ -74,7 +74,9 @@ def start_bot():
         print("🔧 Creating virtual environment...")
         os.system(f"python3 -m venv {VENV_PATH}")
         os.system(f"{VENV_PATH}/bin/pip install --upgrade pip")
-        os.system(f"{VENV_PATH}/bin/pip install pyTelegramBotAPI")
+
+    # Ensure pyTelegramBotAPI is installed even if venv exists
+    os.system(f"{VENV_PATH}/bin/pip install pyTelegramBotAPI")
 
     # Check if the bot is already running
     if os.system(f"pgrep -f '{PYTHON_BIN} {BOT_PATH}' > /dev/null") == 0:
