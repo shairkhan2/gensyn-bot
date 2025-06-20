@@ -1,14 +1,10 @@
 import os
 import time
-import json
 import subprocess
 
 BOT_CONFIG = "/root/bot_config.env"
-CONFIG_FILE = "/root/vm_registry.json"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 BOT_PATH = "/root/gensyn-bot/bot.py"
-
-# Setup section
 
 def menu():
     while True:
@@ -58,12 +54,10 @@ def setup_bot():
     print("\n🤖 Telegram Bot Setup")
     token = input("Bot Token: ")
     user_id = input("Your Telegram User ID: ")
-    vm_name = input("VM Name (e.g., gcp-1): ")
 
     with open(BOT_CONFIG, "w") as f:
         f.write(f"BOT_TOKEN={token}\n")
         f.write(f"USER_ID={user_id}\n")
-        f.write(f"VM_NAME={vm_name}\n")
 
     if not os.path.exists(BOT_PATH):
         os.system("cp ./default_bot.py /root/gensyn-bot/bot.py")
