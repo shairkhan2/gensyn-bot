@@ -5,6 +5,8 @@ import subprocess
 BOT_CONFIG = "/root/bot_config.env"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 BOT_PATH = "/root/gensyn-bot/bot.py"
+VENV_PATH = "/root/gensyn-bot/venv"
+PYTHON_BIN = f"{VENV_PATH}/bin/python3"
 
 def menu():
     while True:
@@ -67,11 +69,19 @@ def setup_bot():
 
 def start_bot():
     print("🚀 Launching bot in background...")
-    if os.system(f"pgrep -f '{BOT_PATH}' > /dev/null") == 0:
+
+    if not os.path.exists(VENV_PATH):
+        print("🔧 Creating virtual environment...")
+        os.system(f"python3 -m venv {VENV_PATH}")
+        os.system(f"{VENV_PATH}/bin/pip install --upgrade pip")
+        os.system(f"{VENV_PATH}/bin/pip install pyTelegramBotAPI")
+
+    # Check if the bot is already running
+    if os.system(f"pgrep -f '{PYTHON_BIN} {BOT_PATH}' > /dev/null") == 0:
         print("⚠️ Bot is already running.")
     else:
-        os.system(f"nohup python3 {BOT_PATH} > /root/bot.log 2>&1 &")
-        print("✅ Bot started. Logs: /root/bot.log")
+        os.system(f"nohup {PYTHON_BIN} {BOT_PATH} > /root/bot.log 2>&1 &")
+        print("✅ Bot started using virtual environment. Logs: /root/bot.log")
 
 def stop_bot():
     print("🛑 Stopping bot...")
@@ -88,7 +98,7 @@ Description=VPN Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 {BOT_PATH}
+ExecStart={PYTHON_BIN} {BOT_PATH}
 EnvironmentFile={BOT_CONFIG}
 Restart=always
 User=root
@@ -109,3 +119,4 @@ WantedBy=multi-user.target
 
 if __name__ == "__main__":
     menu()
+
