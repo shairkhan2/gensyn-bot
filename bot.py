@@ -19,7 +19,6 @@ with open(BOT_CONFIG) as f:
 
 BOT_TOKEN = config["BOT_TOKEN"]
 USER_ID = int(config["USER_ID"])
-VM_NAME = config["VM_NAME"]
 
 bot = TeleBot(BOT_TOKEN)
 
@@ -38,12 +37,12 @@ def get_menu():
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
-        bot.send_message(message.chat.id, f"🤖 {VM_NAME} ready.", reply_markup=get_menu())
+        bot.send_message(message.chat.id, f"🤖 Bot ready.", reply_markup=get_menu())
 
 @bot.message_handler(commands=['who'])
 def who_handler(message):
     if message.from_user.id == USER_ID:
-        bot.send_message(message.chat.id, f"👤 This VM: {VM_NAME}")
+        bot.send_message(message.chat.id, "👤 This is your active VPN bot.")
 
 @bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
