@@ -42,7 +42,7 @@ def start_handler(message):
 @bot.message_handler(commands=['who'])
 def who_handler(message):
     if message.from_user.id == USER_ID:
-        bot.send_message(message.chat.id, "👤 This is your active VPN bot.")
+        bot.send_message(message.chat.id, f"👤 This is your VPN Bot")
 
 @bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
@@ -50,10 +50,10 @@ def gensyn_status_handler(message):
         return
     try:
         response = requests.get("http://localhost:3000", timeout=3)
-        if response.ok:
+        if "Sign in to Gensyn" in response.text:
             bot.send_message(message.chat.id, "✅ Gensyn running")
         else:
-            bot.send_message(message.chat.id, "❌ Gensyn not running (bad response)")
+            bot.send_message(message.chat.id, f"❌ Gensyn response did not match expected content")
     except Exception:
         bot.send_message(message.chat.id, "❌ Gensyn not running")
 
@@ -80,10 +80,10 @@ def callback_query(call):
     elif call.data == 'gensyn_status':
         try:
             response = requests.get("http://localhost:3000", timeout=3)
-            if response.ok:
+            if "Sign in to Gensyn" in response.text:
                 bot.send_message(call.message.chat.id, "✅ Gensyn running")
             else:
-                bot.send_message(call.message.chat.id, "❌ Gensyn not running (bad response)")
+                bot.send_message(call.message.chat.id, f"❌ Gensyn response did not match expected content")
         except Exception:
             bot.send_message(call.message.chat.id, "❌ Gensyn not running")
 
@@ -93,8 +93,8 @@ def monitor():
     while True:
         try:
             try:
-                requests.get('http://localhost:3000', timeout=3)
-                alive = True
+                response = requests.get('http://localhost:3000', timeout=3)
+                alive = "Sign in to Gensyn" in response.text
             except requests.RequestException:
                 alive = False
 
