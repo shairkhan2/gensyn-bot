@@ -61,16 +61,12 @@ def start_gensyn_session(chat_id):
 
 def setup_autostart(chat_id):
     try:
-        # Create backup directory if not exists
         os.makedirs(BACKUP_DIR, exist_ok=True)
-        
-        # Backup critical files
         if os.path.exists(USER_DATA_PATH):
             shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_DIR, "userData.json"))
         if os.path.exists(USER_APIKEY_PATH):
             shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_DIR, "userApiKey.json"))
-        
-        # Create systemd service
+
         service_content = f"""[Unit]
 Description=Gensyn Swarm Service
 After=network.target
@@ -88,15 +84,13 @@ RestartSec=30
 [Install]
 WantedBy=multi-user.target
 """
-        
         with open("/etc/systemd/system/gensyn.service", "w") as f:
             f.write(service_content)
-        
-        # Enable and start service
+
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "enable", "gensyn.service"], check=True)
         subprocess.run(["systemctl", "start", "gensyn.service"], check=True)
-        
+
         bot.send_message(chat_id, "✅ Auto-start configured! Gensyn will now start on boot.")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error setting up auto-start: {str(e)}")
@@ -110,6 +104,20 @@ def start_handler(message):
 def who_handler(message):
     if message.from_user.id == USER_ID:
         bot.send_message(message.chat.id, f"👤 This is your VPN Bot")
+
+@bot.message_handler(func=lambda message: message.from_user.id == USER_ID and message.text.startswith("otp:"))
+def handle_otp(message):
+    otp = message.text.replace("otp:", "").strip()
+    with open("/root/otp.txt", "w") as f:
+        f.write(otp)
+    bot.send_message(message.chat.id, "✅ OTP saved.")
+
+@bot.message_handler(func=lambda message: message.from_user.id == USER_ID and message.text.startswith("email:"))
+def handle_email(message):
+    email = message.text.replace("email:", "").strip()
+    with open("/root/email.txt", "w") as f:
+        f.write(email)
+    bot.send_message(message.chat.id, "✅ Email saved.")
 
 @bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
@@ -140,6 +148,9 @@ def callback_query(call):
 
     elif call.data == 'gensyn_login':
         try:
+            # Clear any old email/otp
+            open("/root/email.txt", "w").close()
+            open("/root/otp.txt", "w").close()
             bot.send_message(call.message.chat.id, "🚀 Launching GENSYN login...")
             subprocess.Popen(["python3", "/root/gensyn-bot/signup.py"])
         except Exception as e:
@@ -187,20 +198,19 @@ def callback_query(call):
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     global waiting_for_pem
-    
+
     if message.from_user.id != USER_ID or not waiting_for_pem:
         return
-    
+
     try:
         file_info = bot.get_file(message.document.file_id)
         file_data = bot.download_file(file_info.file_path)
-        
-        # Ensure directory exists
+
         os.makedirs(os.path.dirname(SWARM_PEM_PATH), exist_ok=True)
-        
+
         with open(SWARM_PEM_PATH, 'wb') as f:
             f.write(file_data)
-        
+
         waiting_for_pem = False
         bot.send_message(message.chat.id, "✅ swarm.pem saved! Starting Gensyn...")
         start_gensyn_session(message.chat.id)
@@ -244,5 +254,6 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
 
