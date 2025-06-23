@@ -72,7 +72,7 @@ def start_bot():
 
     # Install pyTelegramBotAPI system-wide
     os.system("pip install pyTelegramBotAPI --break-system-packages")
-
+    python-dotenv
     # Kill existing screen session if running
     os.system("screen -S vpn_bot -X quit")
 
