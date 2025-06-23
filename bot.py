@@ -4,11 +4,16 @@ import threading
 import subprocess
 import logging
 import requests
+import shutil
 from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 BOT_CONFIG = "/root/bot_config.env"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
+SWARM_PEM_PATH = "/root/rl-swarm/swarm.pem"
+USER_DATA_PATH = "/root/rl-swarm/modal-login/temp-data/userData.json"
+USER_APIKEY_PATH = "/root/rl-swarm/modal-login/temp-data/userApiKey.json"
+BACKUP_DIR = "/root/gensyn_backups"
 
 logging.basicConfig(filename='/root/bot_error.log', level=logging.ERROR)
 
@@ -21,19 +26,80 @@ BOT_TOKEN = config["BOT_TOKEN"]
 USER_ID = int(config["USER_ID"])
 
 bot = TeleBot(BOT_TOKEN)
+waiting_for_pem = False
+
+# Create backup directory if it doesn't exist
+os.makedirs(BACKUP_DIR, exist_ok=True)
 
 def get_menu():
     markup = InlineKeyboardMarkup()
-    markup.add(
+    markup.row(
         InlineKeyboardButton("🌐 Check IP", callback_data="check_ip"),
         InlineKeyboardButton("📶 VPN ON", callback_data="vpn_on"),
         InlineKeyboardButton("📴 VPN OFF", callback_data="vpn_off")
     )
-    markup.add(
+    markup.row(
         InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status"),
-        InlineKeyboardButton("🔑 Sign In to GENSYN", callback_data="gensyn_login")
+        InlineKeyboardButton("🔑 Gensyn Login", callback_data="gensyn_login")
+    )
+    markup.row(
+        InlineKeyboardButton("▶️ Start Gensyn", callback_data="start_gensyn"),
+        InlineKeyboardButton("🔁 Set Auto-Start", callback_data="set_autostart")
     )
     return markup
+
+def start_gensyn_session(chat_id):
+    try:
+        commands = [
+            "cd /root/rl-swarm",
+            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
+        ]
+        subprocess.run("; ".join(commands), shell=True, check=True)
+        bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn'")
+    except subprocess.CalledProcessError as e:
+        bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
+
+def setup_autostart(chat_id):
+    try:
+        # Create backup directory if not exists
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        
+        # Backup critical files
+        if os.path.exists(USER_DATA_PATH):
+            shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_DIR, "userData.json"))
+        if os.path.exists(USER_APIKEY_PATH):
+            shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_DIR, "userApiKey.json"))
+        
+        # Create systemd service
+        service_content = f"""[Unit]
+Description=Gensyn Swarm Service
+After=network.target
+
+[Service]
+Type=forking
+User=root
+WorkingDirectory=/root/rl-swarm
+ExecStartPre=/bin/bash -c 'mkdir -p /root/rl-swarm/modal-login/temp-data && cp {BACKUP_DIR}/userData.json {USER_DATA_PATH} || true'
+ExecStartPre=/bin/bash -c 'cp {BACKUP_DIR}/userApiKey.json {USER_APIKEY_PATH} || true'
+ExecStart=/bin/bash -c 'screen -dmS gensyn bash -c "python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh"'
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+"""
+        
+        with open("/etc/systemd/system/gensyn.service", "w") as f:
+            f.write(service_content)
+        
+        # Enable and start service
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "gensyn.service"], check=True)
+        subprocess.run(["systemctl", "start", "gensyn.service"], check=True)
+        
+        bot.send_message(chat_id, "✅ Auto-start configured! Gensyn will now start on boot.")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Error setting up auto-start: {str(e)}")
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -60,6 +126,8 @@ def gensyn_status_handler(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
+    global waiting_for_pem
+
     if call.from_user.id != USER_ID:
         return
 
@@ -95,6 +163,50 @@ def callback_query(call):
         except Exception:
             bot.send_message(call.message.chat.id, "❌ Gensyn not running")
 
+    elif call.data == 'start_gensyn':
+        if os.path.exists(SWARM_PEM_PATH):
+            start_gensyn_session(call.message.chat.id)
+        else:
+            markup = InlineKeyboardMarkup()
+            markup.add(
+                InlineKeyboardButton("🆕 Start Fresh", callback_data="start_fresh"),
+                InlineKeyboardButton("📤 Upload swarm.pem", callback_data="upload_pem")
+            )
+            bot.send_message(call.message.chat.id, "🔑 swarm.pem not found. Choose an option:", reply_markup=markup)
+
+    elif call.data == 'start_fresh':
+        start_gensyn_session(call.message.chat.id)
+
+    elif call.data == 'upload_pem':
+        waiting_for_pem = True
+        bot.send_message(call.message.chat.id, "⬆️ Please send the swarm.pem file now...")
+
+    elif call.data == 'set_autostart':
+        setup_autostart(call.message.chat.id)
+
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    global waiting_for_pem
+    
+    if message.from_user.id != USER_ID or not waiting_for_pem:
+        return
+    
+    try:
+        file_info = bot.get_file(message.document.file_id)
+        file_data = bot.download_file(file_info.file_path)
+        
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(SWARM_PEM_PATH), exist_ok=True)
+        
+        with open(SWARM_PEM_PATH, 'wb') as f:
+            f.write(file_data)
+        
+        waiting_for_pem = False
+        bot.send_message(message.chat.id, "✅ swarm.pem saved! Starting Gensyn...")
+        start_gensyn_session(message.chat.id)
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Error saving file: {str(e)}")
+        waiting_for_pem = False
 
 def monitor():
     previous_ip = ''
