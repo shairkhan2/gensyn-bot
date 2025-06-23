@@ -54,24 +54,7 @@ pip install -r requirements.txt
 echo "🌐 Installing Playwright browsers..."
 # Detect and install browser dependencies for Playwright
 echo "📦 Installing Playwright browser dependencies..."
-apt-get install libnss3\                         ║
-║         libnspr4\                                    ║
-║         libatk1.0-0t64\                              ║
-║         libatk-bridge2.0-0t64\                       ║
-║         libcups2t64\                                 ║
-║         libxcb1\                                     ║
-║         libxkbcommon0\                               ║
-║         libatspi2.0-0t64\                            ║
-║         libx11-6\                                    ║
-║         libxcomposite1\                              ║
-║         libxdamage1\                                 ║
-║         libxext6\                                    ║
-║         libxfixes3\                                  ║
-║         libxrandr2\                                  ║
-║         libgbm1\                                     ║
-║         libpango-1.0-0\                              ║
-║         libcairo2\                                   ║
-║         libasound2t64  
+  playwright install-deps
 
 echo "✅ All Python packages and browsers installed."
 
