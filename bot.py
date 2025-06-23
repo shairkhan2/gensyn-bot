@@ -30,7 +30,8 @@ def get_menu():
         InlineKeyboardButton("📴 VPN OFF", callback_data="vpn_off")
     )
     markup.add(
-        InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status")
+        InlineKeyboardButton("📊 Gensyn Status", callback_data="gensyn_status"),
+        InlineKeyboardButton("🔑 Sign In to GENSYN", callback_data="gensyn_login")
     )
     return markup
 
