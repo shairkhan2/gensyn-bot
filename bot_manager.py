@@ -5,8 +5,9 @@ import subprocess
 BOT_CONFIG = "/root/bot_config.env"
 WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 BOT_PATH = "/root/gensyn-bot/bot.py"
-VENV_PATH = "/root/gensyn-bot/venv"
+VENV_PATH = "/root/gensyn-bot/.venv"
 PYTHON_BIN = f"{VENV_PATH}/bin/python3"
+
 
 def menu():
     while True:
@@ -37,6 +38,7 @@ def menu():
         else:
             print("❌ Invalid option.")
 
+
 def setup_vpn():
     print("\n📋 Paste full WireGuard config. Type 'END' on a new line to finish:")
     config = []
@@ -51,6 +53,7 @@ def setup_vpn():
         f.write("\n".join(config))
     os.system("chmod 600 " + WG_CONFIG_PATH)
     print("✅ WireGuard config saved.")
+
 
 def setup_bot():
     print("\n🤖 Telegram Bot Setup")
@@ -67,17 +70,17 @@ def setup_bot():
 
     print("✅ Bot config saved and default bot.py is ready.")
 
+
 def start_bot():
     print("🚀 Installing dependencies and launching bot in a screen session...")
 
-    # Install pyTelegramBotAPI system-wide
-    os.system("pip install pyTelegramBotAPI --break-system-packages")
-    python-dotenv
+    os.system(f"{VENV_PATH}/bin/pip install -r /root/gensyn-bot/requirements.txt")
+
     # Kill existing screen session if running
     os.system("screen -S vpn_bot -X quit")
 
     # Start a new screen session running the bot
-    os.system("screen -dmS vpn_bot bash -c 'python3 /root/gensyn-bot/bot.py'")
+    os.system(f"screen -dmS vpn_bot bash -c 'source {VENV_PATH}/bin/activate && python3 {BOT_PATH}'")
     print("✅ Bot started in screen session named 'vpn_bot'. Use: screen -r vpn_bot")
 
 
@@ -89,6 +92,7 @@ def stop_bot():
     else:
         print("ℹ️ Bot is not running.")
 
+
 def setup_systemd():
     print("\n⚙️ Enabling bot service...")
     service = f"""[Unit]
@@ -96,7 +100,7 @@ Description=VPN Telegram Bot
 After=network.target
 
 [Service]
-ExecStart={PYTHON_BIN} {BOT_PATH}
+ExecStart=/bin/bash -c 'cd /root/gensyn-bot && source {VENV_PATH}/bin/activate && exec python3 {BOT_PATH}'
 EnvironmentFile={BOT_CONFIG}
 Restart=always
 User=root
@@ -114,6 +118,7 @@ WantedBy=multi-user.target
     os.system("systemctl enable bot")
     os.system("systemctl restart bot")
     print("✅ Bot service enabled and running via systemd.")
+
 
 if __name__ == "__main__":
     menu()
