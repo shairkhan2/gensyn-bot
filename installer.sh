@@ -3,7 +3,7 @@
 set -e
 
 echo "🔧 Installing dependencies..."
-
+playwright install-deps
 sudo apt update && sudo apt install -y \
     python3 \
     python3-pip \
@@ -50,11 +50,6 @@ fi
 echo "📦 Installing Python packages..."
 pip install --upgrade pip
 pip install -r requirements.txt
-# Install Playwright browser dependencies
-echo "🌐 Installing Playwright browsers..."
-# Detect and install browser dependencies for Playwright
-echo "📦 Installing Playwright browser dependencies..."
-  playwright install-deps
 
 echo "✅ All Python packages and browsers installed."
 
