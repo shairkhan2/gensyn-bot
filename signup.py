@@ -1,5 +1,3 @@
-# signup.py
-
 import os
 import asyncio
 import socket
@@ -52,7 +50,11 @@ async def main():
         try:
             await page.goto("http://localhost:3000", timeout=60000)
 
-            await page.get_by_role("button", name="Login").click()
+            print("🖱 Waiting for and clicking 'Login' button...")
+            login_btn = page.get_by_role("button", name="Login")
+            login_btn.wait_for(state="visible")
+            login_btn.wait_for(state="enabled")
+            await login_btn.click()
             await page.screenshot(path="/root/after_login_click.png", full_page=True)
             bot.send_photo(USER_ID, open("/root/after_login_click.png", "rb"))
 
