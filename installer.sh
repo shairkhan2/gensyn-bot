@@ -52,7 +52,36 @@ pip install --upgrade pip
 pip install -r requirements.txt
 # Install Playwright browser dependencies
 echo "🌐 Installing Playwright browsers..."
-python3 -m playwright install
+# Detect and install browser dependencies for Playwright
+echo "📦 Installing Playwright browser dependencies..."
+sudo apt install -y \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libasound2t64 \
+    libxshmfence1 \
+    libxss1 \
+    libxfixes3 \
+    libx11-xcb1 \
+    libxtst6 \
+    libatspi2.0-0 \
+    libdrm2 \
+    libxext6 \
+    libegl1 \
+    libwayland-client0 \
+    libwayland-cursor0 \
+    libwayland-egl1 \
+    libopengl0 \
+    libwoff1 \
+    libpng16-16 \
+    libjpeg-turbo8 \
+    fonts-liberation \
+    libappindicator3-1 \
+    libevent-2.1-7 || true
 
 echo "✅ All Python packages and browsers installed."
 
