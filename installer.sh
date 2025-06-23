@@ -14,7 +14,6 @@ sudo apt update && sudo apt install -y \
     net-tools \
     dos2unix \
     screen
-playwright install-deps
 echo "✅ System packages installed."
 
 # Clone gensyn-bot repo
