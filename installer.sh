@@ -14,7 +14,7 @@ sudo apt update && sudo apt install -y \
     net-tools \
     dos2unix \
     screen
-
+playwright install-deps
 echo "✅ System packages installed."
 
 # Clone gensyn-bot repo
@@ -51,7 +51,6 @@ fi
 echo "📦 Installing Python packages..."
 pip install --upgrade pip
 pip install -r requirements.txt
-playwright install-deps
 # Install Playwright browser dependencies
 echo "🌐 Installing Playwright browsers..."
 python3 -m playwright install
