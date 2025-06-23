@@ -69,6 +69,13 @@ def callback_query(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error checking IP: {str(e)}")
 
+    elif call.data == 'gensyn_login':
+        try:
+            bot.send_message(call.message.chat.id, "🚀 Launching GENSYN login...")
+            subprocess.Popen(["python3", "/root/gensyn-bot/signup.py"])
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Error launching signup: {str(e)}")
+
     elif call.data == 'vpn_on':
         subprocess.run(['wg-quick', 'up', 'wg0'])
         bot.send_message(call.message.chat.id, '✅ VPN enabled')
@@ -86,6 +93,7 @@ def callback_query(call):
                 bot.send_message(call.message.chat.id, f"❌ Gensyn response did not match expected content")
         except Exception:
             bot.send_message(call.message.chat.id, "❌ Gensyn not running")
+
 
 def monitor():
     previous_ip = ''
