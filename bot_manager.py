@@ -7,6 +7,7 @@ WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 BOT_PATH = "/root/gensyn-bot/bot.py"
 VENV_PATH = "/root/gensyn-bot/.venv"
 PYTHON_BIN = f"{VENV_PATH}/bin/python3"
+REQUIREMENTS = "/root/gensyn-bot/requirements.txt"
 
 
 def menu():
@@ -19,6 +20,8 @@ def menu():
         print("5. Start Bot")
         print("6. Stop Bot")
         print("7. View Bot Logs")
+        print("8. Rebuild Virtual Environment")
+        print("9. Install requirements.txt")
         choice = input("\nSelect an option: ")
 
         if choice == "1":
@@ -35,6 +38,10 @@ def menu():
             stop_bot()
         elif choice == "7":
             os.system("journalctl -u bot -f")
+        elif choice == "8":
+            rebuild_venv()
+        elif choice == "9":
+            install_requirements()
         else:
             print("❌ Invalid option.")
 
@@ -72,15 +79,14 @@ def setup_bot():
 
 
 def start_bot():
-    print("🚀 Installing dependencies and launching bot in a screen session...")
+    print("🚀 Starting bot in a screen session with virtual environment...")
 
-    os.system(f"{VENV_PATH}/bin/pip install -r /root/gensyn-bot/requirements.txt")
+    if not os.path.exists(f"{VENV_PATH}/bin/activate"):
+        print("❌ Virtual environment not found. Please run option 8 to rebuild it.")
+        return
 
-    # Kill existing screen session if running
     os.system("screen -S vpn_bot -X quit")
-
-    # Start a new screen session running the bot
-    os.system(f"screen -dmS vpn_bot bash -c 'source {VENV_PATH}/bin/activate && python3 {BOT_PATH}'")
+    os.system(f"screen -dmS vpn_bot bash -c 'source {VENV_PATH}/bin/activate && python {BOT_PATH}'")
     print("✅ Bot started in screen session named 'vpn_bot'. Use: screen -r vpn_bot")
 
 
@@ -95,12 +101,14 @@ def stop_bot():
 
 def setup_systemd():
     print("\n⚙️ Enabling bot service...")
+
     service = f"""[Unit]
 Description=VPN Telegram Bot
 After=network.target
 
 [Service]
-ExecStart=/bin/bash -c 'cd /root/gensyn-bot && source {VENV_PATH}/bin/activate && exec python3 {BOT_PATH}'
+Type=simple
+ExecStart={PYTHON_BIN} {BOT_PATH}
 EnvironmentFile={BOT_CONFIG}
 Restart=always
 User=root
@@ -111,13 +119,35 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
+
     with open("/etc/systemd/system/bot.service", "w") as f:
         f.write(service)
+
     os.system("systemctl daemon-reexec")
     os.system("systemctl daemon-reload")
     os.system("systemctl enable bot")
     os.system("systemctl restart bot")
     print("✅ Bot service enabled and running via systemd.")
+
+
+def rebuild_venv():
+    print("♻️ Rebuilding virtual environment...")
+    os.system(f"rm -rf {VENV_PATH}")
+    os.system(f"python3 -m venv {VENV_PATH}")
+    os.system(f"{PYTHON_BIN} -m pip install --upgrade pip")
+    print("✅ Virtual environment rebuilt.")
+
+
+def install_requirements():
+    print("📦 Installing requirements.txt and Playwright dependencies...")
+    if not os.path.exists(REQUIREMENTS):
+        print("❌ requirements.txt not found.")
+        return
+
+    os.system(f"{PYTHON_BIN} -m pip install -r {REQUIREMENTS}")
+    os.system(f"{PYTHON_BIN} -m playwright install")
+    os.system(f"{PYTHON_BIN} -m playwright install-deps")
+    print("✅ Requirements and Playwright setup complete.")
 
 
 if __name__ == "__main__":
