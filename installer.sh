@@ -17,7 +17,6 @@ sudo apt update && sudo apt install -y \
     screen \
     nodejs \
     npm
-
 echo "✅ System packages installed."
 
 # Clone the gensyn-bot repository
@@ -32,7 +31,7 @@ else
 fi
 
 cd /root/gensyn-bot
-
+playwright install
 # Convert all scripts to Unix format
 find . -name "*.py" -exec dos2unix {} \;
 dos2unix *.sh || true
