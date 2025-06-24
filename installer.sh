@@ -37,20 +37,30 @@ cd /root/gensyn-bot
 find . -name "*.py" -exec dos2unix {} \;
 dos2unix *.sh || true
 
-# Install Playwright browser dependencies
-echo "📦 Installing Playwright browser dependencies..."
-npm install -g playwright
-playwright install-deps
-
 # Set up Python virtual environment and install dependencies
 echo "🐍 Setting up Python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
+sudo apt install \
+  libicu74 \
+  libnss3 \
+  libatk1.0-0t64 \
+  libatk-bridge2.0-0t64 \
+  libcups2t64 \
+  libatspi2.0-0t64 \
+  libx11-6 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxext6 \
+  libxfixes3 \
+  libxrandr2 \
+  libgbm1 \
+  libxcb1 \
+  libxkbcommon0 \
+  libpango-1.0-0 \
+  libcairo2 \
+  libasound2t64
 
-echo "📦 Installing Python packages..."
-pip install --upgrade pip
-pip install -r requirements.txt
-python3 -m playwright install
 
 echo "✅ Python & Playwright setup complete."
 
