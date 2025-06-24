@@ -36,6 +36,7 @@ dos2unix *.sh || true
 
 # Set up Python virtual environment and install dependencies
 echo "🐍 Setting up Python virtual environment..."
+playwright install
 python3 -m venv venv
 source venv/bin/activate
 sudo apt install \
