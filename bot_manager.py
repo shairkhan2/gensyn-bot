@@ -79,7 +79,7 @@ def setup_bot():
 
 
 def start_bot():
-    print("🚀 Starting bot.py (venv) and reward.py (system) in a screen session...")
+    print("🚀 Starting bot and reward.py in a screen session with virtual environment...")
 
     if not os.path.exists(f"{VENV_PATH}/bin/activate"):
         print("❌ Virtual environment not found. Please run option 8 to rebuild it.")
@@ -87,16 +87,12 @@ def start_bot():
 
     REWARD_PATH = "/root/gensyn-bot/reward.py"
 
-    # Kill old screen session if running
     os.system("screen -S vpn_bot -X quit")
-
-    # Start new screen session with both scripts
     os.system(
-        f"screen -dmS vpn_bot bash -c 'source {VENV_PATH}/bin/activate && python {BOT_PATH} & "
-        f"python3 {REWARD_PATH} && wait'"
+        f"screen -dmS vpn_bot bash -c 'source {VENV_PATH}/bin/activate && "
+        f"python {BOT_PATH} & python {REWARD_PATH} && wait'"
     )
-
-    print("✅ bot.py (venv) and reward.py (system) started in screen session 'vpn_bot'. Use: screen -r vpn_bot")
+    print("✅ bot.py and reward.py started in screen session named 'vpn_bot'. Use: screen -r vpn_bot")
 
 
 def stop_bot():
