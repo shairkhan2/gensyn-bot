@@ -17,7 +17,6 @@ BACKUP_USERDATA_DIR = "/root/gensyn-bot/backup-userdata"
 
 logging.basicConfig(filename='/root/bot_error.log', level=logging.ERROR)
 
-# Load bot config
 with open(BOT_CONFIG) as f:
     lines = f.read().strip().split("\n")
     config = dict(line.split("=", 1) for line in lines if "=" in line)
@@ -28,7 +27,6 @@ USER_ID = int(config["USER_ID"])
 bot = TeleBot(BOT_TOKEN)
 waiting_for_pem = False
 
-# Ensure backup dir exists
 os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
 
 def get_menu():
@@ -146,16 +144,23 @@ def callback_query(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error checking IP: {str(e)}")
 
-        elif call.data == 'gensyn_login':
+    elif call.data == 'gensyn_login':
         try:
-            # Clear any old email/otp
             open("/root/email.txt", "w").close()
             open("/root/otp.txt", "w").close()
             bot.send_message(call.message.chat.id, "🚀 Launching GENSYN login...")
 
-            venv_python = "/root/gensyn-bot/venv/bin/python3"
+            venv_python = "/root/gensyn-bot/.venv/bin/python3"
             signup_script = "/root/gensyn-bot/signup.py"
-            subprocess.Popen([venv_python, signup_script])
+            venv_site_packages = "/root/gensyn-bot/.venv/lib/python3.12/site-packages"
+
+            with open("/root/signup.log", "w") as f:
+                subprocess.Popen(
+                    [venv_python, signup_script],
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONPATH": venv_site_packages}
+                )
 
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error launching signup: {str(e)}")
@@ -179,19 +184,6 @@ def callback_query(call):
             bot.send_message(call.message.chat.id, "❌ Gensyn not running")
 
     elif call.data == 'start_gensyn':
-        # NEW: Restore user data if backup exists
-        restored = False
-        os.makedirs(os.path.dirname(USER_DATA_PATH), exist_ok=True)
-        if os.path.exists(os.path.join(BACKUP_USERDATA_DIR, "userData.json")):
-            shutil.copy(os.path.join(BACKUP_USERDATA_DIR, "userData.json"), USER_DATA_PATH)
-            restored = True
-        if os.path.exists(os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json")):
-            shutil.copy(os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json"), USER_APIKEY_PATH)
-            restored = True
-
-        if restored:
-            bot.send_message(call.message.chat.id, "✅ Previous user data found & restored. No need to login again!")
-
         if os.path.exists(SWARM_PEM_PATH):
             start_gensyn_session(call.message.chat.id)
         else:
@@ -263,20 +255,8 @@ def monitor():
 
         time.sleep(60)
 
-def backup_userdata_loop():
-    while True:
-        os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
-        if os.path.exists(USER_DATA_PATH):
-            shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_USERDATA_DIR, "userData.json"))
-        if os.path.exists(USER_APIKEY_PATH):
-            shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json"))
-        time.sleep(1800)  # every 30 min
-
-# Start threads
 threading.Thread(target=monitor, daemon=True).start()
-threading.Thread(target=backup_userdata_loop, daemon=True).start()
 
-# Start polling
 try:
     bot.infinity_polling()
 except Exception as e:
