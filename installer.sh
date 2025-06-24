@@ -14,9 +14,7 @@ sudo apt update && sudo apt install -y \
     wireguard \
     net-tools \
     dos2unix \
-    screen \
-    nodejs \
-    npm
+    screen 
 echo "✅ System packages installed."
 
 # Clone the gensyn-bot repository
