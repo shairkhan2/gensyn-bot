@@ -150,8 +150,6 @@ def install_requirements():
         return
 
     os.system(f"{PYTHON_BIN} -m pip install -r {REQUIREMENTS}")
-    os.system(f"{PYTHON_BIN} -m playwright install")
-    os.system(f"{PYTHON_BIN} -m playwright install-deps")
     print("✅ Requirements and Playwright setup complete.")
 
 
