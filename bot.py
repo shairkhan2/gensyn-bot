@@ -146,12 +146,17 @@ def callback_query(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error checking IP: {str(e)}")
 
-    elif call.data == 'gensyn_login':
+        elif call.data == 'gensyn_login':
         try:
+            # Clear any old email/otp
             open("/root/email.txt", "w").close()
             open("/root/otp.txt", "w").close()
             bot.send_message(call.message.chat.id, "🚀 Launching GENSYN login...")
-            subprocess.Popen(["python3", "/root/gensyn-bot/signup.py"])
+
+            venv_python = "/root/gensyn-bot/venv/bin/python3"
+            signup_script = "/root/gensyn-bot/signup.py"
+            subprocess.Popen([venv_python, signup_script])
+
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error launching signup: {str(e)}")
 
