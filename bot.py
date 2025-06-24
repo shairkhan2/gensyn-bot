@@ -13,7 +13,7 @@ WG_CONFIG_PATH = "/etc/wireguard/wg0.conf"
 SWARM_PEM_PATH = "/root/rl-swarm/swarm.pem"
 USER_DATA_PATH = "/root/rl-swarm/modal-login/temp-data/userData.json"
 USER_APIKEY_PATH = "/root/rl-swarm/modal-login/temp-data/userApiKey.json"
-BACKUP_DIR = "/root/gensyn_backups"
+BACKUP_USERDATA_DIR = "/root/gensyn-bot/backup-userdata"
 
 logging.basicConfig(filename='/root/bot_error.log', level=logging.ERROR)
 
@@ -28,8 +28,8 @@ USER_ID = int(config["USER_ID"])
 bot = TeleBot(BOT_TOKEN)
 waiting_for_pem = False
 
-# Create backup directory if it doesn't exist
-os.makedirs(BACKUP_DIR, exist_ok=True)
+# Ensure backup dir exists
+os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
 
 def get_menu():
     markup = InlineKeyboardMarkup()
@@ -61,11 +61,11 @@ def start_gensyn_session(chat_id):
 
 def setup_autostart(chat_id):
     try:
-        os.makedirs(BACKUP_DIR, exist_ok=True)
+        os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
         if os.path.exists(USER_DATA_PATH):
-            shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_DIR, "userData.json"))
+            shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_USERDATA_DIR, "userData.json"))
         if os.path.exists(USER_APIKEY_PATH):
-            shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_DIR, "userApiKey.json"))
+            shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json"))
 
         service_content = f"""[Unit]
 Description=Gensyn Swarm Service
@@ -75,8 +75,8 @@ After=network.target
 Type=forking
 User=root
 WorkingDirectory=/root/rl-swarm
-ExecStartPre=/bin/bash -c 'mkdir -p /root/rl-swarm/modal-login/temp-data && cp {BACKUP_DIR}/userData.json {USER_DATA_PATH} || true'
-ExecStartPre=/bin/bash -c 'cp {BACKUP_DIR}/userApiKey.json {USER_APIKEY_PATH} || true'
+ExecStartPre=/bin/bash -c 'mkdir -p /root/rl-swarm/modal-login/temp-data && cp {BACKUP_USERDATA_DIR}/userData.json {USER_DATA_PATH} || true'
+ExecStartPre=/bin/bash -c 'cp {BACKUP_USERDATA_DIR}/userApiKey.json {USER_APIKEY_PATH} || true'
 ExecStart=/bin/bash -c 'screen -dmS gensyn bash -c "python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh"'
 Restart=always
 RestartSec=30
@@ -148,7 +148,6 @@ def callback_query(call):
 
     elif call.data == 'gensyn_login':
         try:
-            # Clear any old email/otp
             open("/root/email.txt", "w").close()
             open("/root/otp.txt", "w").close()
             bot.send_message(call.message.chat.id, "🚀 Launching GENSYN login...")
@@ -175,6 +174,19 @@ def callback_query(call):
             bot.send_message(call.message.chat.id, "❌ Gensyn not running")
 
     elif call.data == 'start_gensyn':
+        # NEW: Restore user data if backup exists
+        restored = False
+        os.makedirs(os.path.dirname(USER_DATA_PATH), exist_ok=True)
+        if os.path.exists(os.path.join(BACKUP_USERDATA_DIR, "userData.json")):
+            shutil.copy(os.path.join(BACKUP_USERDATA_DIR, "userData.json"), USER_DATA_PATH)
+            restored = True
+        if os.path.exists(os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json")):
+            shutil.copy(os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json"), USER_APIKEY_PATH)
+            restored = True
+
+        if restored:
+            bot.send_message(call.message.chat.id, "✅ Previous user data found & restored. No need to login again!")
+
         if os.path.exists(SWARM_PEM_PATH):
             start_gensyn_session(call.message.chat.id)
         else:
@@ -246,14 +258,23 @@ def monitor():
 
         time.sleep(60)
 
-# Start monitor thread
+def backup_userdata_loop():
+    while True:
+        os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
+        if os.path.exists(USER_DATA_PATH):
+            shutil.copy(USER_DATA_PATH, os.path.join(BACKUP_USERDATA_DIR, "userData.json"))
+        if os.path.exists(USER_APIKEY_PATH):
+            shutil.copy(USER_APIKEY_PATH, os.path.join(BACKUP_USERDATA_DIR, "userApiKey.json"))
+        time.sleep(1800)  # every 30 min
+
+# Start threads
 threading.Thread(target=monitor, daemon=True).start()
+threading.Thread(target=backup_userdata_loop, daemon=True).start()
 
 # Start polling
 try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
-
 
 
