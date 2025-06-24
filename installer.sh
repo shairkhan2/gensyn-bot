@@ -39,7 +39,7 @@ fi
 cd /root/gensyn-bot
 
 # ------------------------------
-# Python virtual env & deps
+# Python virtual env & explicit pip install
 # ------------------------------
 
 echo "🐍 Setting up Python virtual environment..."
@@ -48,10 +48,27 @@ python3 -m venv venv
 source venv/bin/activate
 
 echo "📦 Installing Python dependencies..."
-pip install -U pip
-pip install -r requirements.txt
 
-# NOW Playwright is available inside venv
+# Upgrade pip first
+pip install --upgrade pip
+
+# Install your known required packages directly (safe + idempotent)
+pip install \
+    pyTelegramBotAPI==4.13.0 \
+    python-dotenv==1.0.1 \
+    requests==2.32.3 \
+    playwright==1.44.0 \
+    web3
+
+# Optionally update requirements.txt for future reference
+echo "pyTelegramBotAPI==4.13.0
+python-dotenv==1.0.1
+requests==2.32.3
+playwright==1.44.0
+web3
+" > requirements.txt
+
+# Install Playwright browsers
 echo "🎭 Installing Playwright browsers..."
 playwright install
 
