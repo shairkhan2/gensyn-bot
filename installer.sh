@@ -7,7 +7,7 @@ echo "🔧 Installing base dependencies..."
 # Update APT
 sudo apt update
 
-# Install system packages (NO Node.js or npm!)
+# Install system packages (NO Node.js or npm)
 sudo apt install -y \
     python3 \
     python3-pip \
@@ -51,7 +51,7 @@ echo "📦 Installing Python dependencies..."
 pip install -U pip
 pip install -r requirements.txt
 
-# Install Playwright browsers (Python version)
+# NOW Playwright is available inside venv
 echo "🎭 Installing Playwright browsers..."
 playwright install
 
@@ -94,3 +94,4 @@ else
     echo "📌 To run later:"
     echo "   source venv/bin/activate && python3 /root/gensyn-bot/bot_manager.py"
 fi
+
