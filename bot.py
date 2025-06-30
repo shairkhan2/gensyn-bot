@@ -35,6 +35,7 @@ bot = TeleBot(BOT_TOKEN)
 waiting_for_pem = False
 login_in_progress = False
 login_lock = threading.Lock()
+tmate_running = False
 
 os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
 os.makedirs(PERIODIC_BACKUP_DIR, exist_ok=True)
@@ -57,8 +58,9 @@ def get_menu():
     markup.row(
         InlineKeyboardButton("🛑 Kill Gensyn", callback_data="kill_gensyn")
     )
+    terminal_label = "🖥️ Terminal: ON" if tmate_running else "🖥️ Terminal: OFF"
     markup.row(
-        InlineKeyboardButton("🖥️ Terminal (tmate)", callback_data="run_tmate")
+        InlineKeyboardButton(terminal_label, callback_data="toggle_tmate")
     )
     return markup
 
@@ -80,69 +82,24 @@ def stop_vpn():
             return True, "⚠️ VPN already disabled"
         return False, f"❌ VPN failed to stop: {str(e)}"
 
-def backup_user_data(send_message=True):
-    try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(PERIODIC_BACKUP_DIR, exist_ok=True)
-        backup_done = False
-        for path, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
-            if os.path.exists(path):
-                backup_file = f"{name.split('.')[0]}_{timestamp}.json"
-                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, backup_file))
-                latest_file = f"{name.split('.')[0]}_latest.json"
-                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, latest_file))
-                backups = sorted(
-                    [f for f in os.listdir(PERIODIC_BACKUP_DIR) if f.startswith(name.split('.')[0]) and not f.endswith("_latest.json")],
-                    key=lambda f: os.path.getmtime(os.path.join(PERIODIC_BACKUP_DIR, f)),
-                    reverse=True
-                )
-                for old_backup in backups[5:]:
-                    os.remove(os.path.join(PERIODIC_BACKUP_DIR, old_backup))
-                backup_done = True
-        if backup_done and send_message:
-            bot.send_message(USER_ID, "✅ Auto-backup completed successfully.")
-        return backup_done
-    except Exception as e:
-        logging.error(f"Backup error: {str(e)}")
-        if send_message:
-            bot.send_message(USER_ID, f"❌ Backup error: {str(e)}")
-        return False
-
-def periodic_backup():
-    while True:
-        try:
-            backup_user_data(send_message=True)
-            time.sleep(1800)
-        except Exception as e:
-            logging.error(f"Periodic backup thread error: {str(e)}")
-            time.sleep(60)
-
-def restore_user_data(chat_id):
-    backup_found = False
-    # Try to restore from latest backup if exists
-    for file, target_path in [("userData_latest.json", USER_DATA_PATH), ("userApiKey_latest.json", USER_APIKEY_PATH)]:
-        backup_path = os.path.join(PERIODIC_BACKUP_DIR, file)
-        if os.path.exists(backup_path):
-            shutil.copy(backup_path, target_path)
-            backup_found = True
-    if backup_found:
-        bot.send_message(chat_id, "✅ User data restored from backup.")
-    else:
-        bot.send_message(chat_id, "⚠️ No backup found to restore.")
-    return backup_found
-
 def start_gensyn_session(chat_id):
     try:
-        backup_found = restore_user_data(chat_id)
+        backup_found = False
+        for file in ["userData.json", "userApiKey.json"]:
+            backup_path = os.path.join(PERIODIC_BACKUP_DIR, file)
+            target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
+            if os.path.exists(backup_path):
+                shutil.copy(backup_path, target_path)
+                backup_found = True
         commands = [
             "cd /root/rl-swarm",
             "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
         ]
         subprocess.run("; ".join(commands), shell=True, check=True)
         if backup_found:
-            bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn' with restored backup.")
+            bot.send_message(chat_id, "✅ User data restored. Gensyn started in screen session 'gensyn'")
         else:
-            bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn'. No user data backup was restored.")
+            bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn'")
     except subprocess.CalledProcessError as e:
         bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
 
@@ -181,6 +138,40 @@ WantedBy=multi-user.target
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error setting up auto-start: {str(e)}")
 
+def backup_user_data():
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs(PERIODIC_BACKUP_DIR, exist_ok=True)
+        for path, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
+            if os.path.exists(path):
+                backup_file = f"{name.split('.')[0]}_{timestamp}.json"
+                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, backup_file))
+                latest_file = f"{name.split('.')[0]}_latest.json"
+                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, latest_file))
+                backups = sorted(
+                    [f for f in os.listdir(PERIODIC_BACKUP_DIR) if f.startswith(name.split('.')[0]) and not f.endswith("_latest.json")],
+                    key=lambda f: os.path.getmtime(os.path.join(PERIODIC_BACKUP_DIR, f)),
+                    reverse=True
+                )
+                for old_backup in backups[5:]:
+                    os.remove(os.path.join(PERIODIC_BACKUP_DIR, old_backup))
+        return True
+    except Exception as e:
+        logging.error(f"Backup error: {str(e)}")
+        return False
+
+def periodic_backup():
+    while True:
+        try:
+            if backup_user_data():
+                logging.info("Periodic backup completed successfully")
+            time.sleep(1800)
+        except Exception as e:
+            logging.error(f"Periodic backup thread error: {str(e)}")
+            time.sleep(60)
+
+threading.Thread(target=periodic_backup, daemon=True).start()
+
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
@@ -190,15 +181,6 @@ def start_handler(message):
 def who_handler(message):
     if message.from_user.id == USER_ID:
         bot.send_message(message.chat.id, f"👤 This is your VPN Bot")
-
-@bot.message_handler(commands=['backup'])
-def manual_backup_handler(message):
-    if message.from_user.id == USER_ID:
-        result = backup_user_data(send_message=False)
-        if result:
-            bot.send_message(message.chat.id, "✅ Manual backup completed.")
-        else:
-            bot.send_message(message.chat.id, "❌ Manual backup failed. Check logs.")
 
 @bot.message_handler(func=lambda message: message.from_user.id == USER_ID)
 def handle_credentials(message):
@@ -233,7 +215,7 @@ def gensyn_status_handler(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    global waiting_for_pem, login_in_progress
+    global waiting_for_pem, login_in_progress, tmate_running
     if call.from_user.id != USER_ID:
         return
     if call.data == 'check_ip':
@@ -308,28 +290,36 @@ def callback_query(call):
             bot.send_message(call.message.chat.id, "🛑 gensyn screen killed (and all child processes).")
         except subprocess.CalledProcessError as e:
             bot.send_message(call.message.chat.id, f"❌ Failed to kill gensyn screen: {str(e)}")
-    elif call.data == 'run_tmate':
-        try:
-            subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
-            subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
-            result = subprocess.run(
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_web}' && "
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_web_ro}' && "
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' && "
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh_ro}'",
-                shell=True, check=True, capture_output=True, text=True
-            )
-            urls = result.stdout.strip().split('\n')
-            msg = (
-                "Note: clear your terminal before sharing readonly access\n"
-                f"web session read only: {urls[1]}\n"
-                f"ssh session read only: {urls[3]}\n"
-                f"web session: {urls[0]}\n"
-                f"ssh session: {urls[2]}"
-            )
-            bot.send_message(call.message.chat.id, msg)
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Failed to start tmate: {str(e)}")
+    elif call.data == 'toggle_tmate':
+        if not tmate_running:
+            # Start tmate
+            try:
+                subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
+                subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
+                result = subprocess.run(
+                    "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
+                    shell=True, check=True, capture_output=True, text=True
+                )
+                ssh_line = result.stdout.strip()
+                tmate_running = True
+                bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
+                bot.send_message(
+                    call.message.chat.id,
+                    f"<code>{ssh_line}</code>",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                tmate_running = False
+                bot.send_message(call.message.chat.id, f"❌ Failed to start tmate: {str(e)}")
+        else:
+            # Kill tmate
+            try:
+                subprocess.run("tmate -S /tmp/tmate.sock kill-server", shell=True, check=True)
+                tmate_running = False
+                bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
+                bot.send_message(call.message.chat.id, "🛑 Terminal session killed.")
+            except Exception as e:
+                bot.send_message(call.message.chat.id, f"❌ Failed to kill tmate: {str(e)}")
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -386,7 +376,6 @@ if os.path.exists(USER_DATA_PATH):
 if os.path.exists(USER_APIKEY_PATH):
     shutil.copy(USER_APIKEY_PATH, os.path.join(PERIODIC_BACKUP_DIR, "userApiKey_latest.json"))
 
-threading.Thread(target=periodic_backup, daemon=True).start()
 threading.Thread(target=monitor, daemon=True).start()
 
 try:
