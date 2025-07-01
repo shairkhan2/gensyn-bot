@@ -17,7 +17,9 @@ sudo apt install -y \
     wireguard \
     net-tools \
     dos2unix \
-    screen
+    screen \
+    tmate
+
 
 echo "✅ Base system packages installed."
 
