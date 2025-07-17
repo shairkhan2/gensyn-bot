@@ -453,7 +453,7 @@ def callback_query(call):
             # Make sure it's executable
             os.chmod(update_script_path, 0o700)
             # Run the script detached
-            subprocess.run(f"nohup bash {update_script_path} >/tmp/bot_update.log 2>&1 &", shell=True)
+            subprocess.run(f"echo 'bash {update_script_path} >/tmp/bot_update.log 2>&1' | at now + 1 minute", shell=True)
             # No completion message, bot will be killed by update
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
