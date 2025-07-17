@@ -425,33 +425,44 @@ def callback_query(call):
             InlineKeyboardButton("Bot Update", callback_data="bot_update")
         )
         bot.send_message(call.message.chat.id, "What do you want to update?", reply_markup=markup)
-elif call.data == "bot_update":
-    try:
-        subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
-        subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
-        result = subprocess.run(
-            "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
-            shell=True, check=True, capture_output=True, text=True
+    elif call.data == "gensyn_update":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Soft Update", callback_data="gensyn_soft_update"),
+            InlineKeyboardButton("Hard Update", callback_data="gensyn_hard_update")
         )
-        ssh_line = result.stdout.strip()
-        bot.send_message(
-            call.message.chat.id,
-            f"<code>{ssh_line}</code>\nUse this SSH connection for backup/restore during update.",
-            parse_mode="HTML"
-        )
-        bot.send_message(call.message.chat.id, "Running bot update script. Please wait...")
-        update_result = subprocess.run(
-            "curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash",
-            shell=True,
-            capture_output=True,
-            text=True
-        )
-        if update_result.returncode == 0:
-            bot.send_message(call.message.chat.id, "✅ Bot update completed successfully.")
-        else:
-            bot.send_message(call.message.chat.id, f"❌ Bot update failed. You can use the SSH session to recover.\nOutput:\n{update_result.stdout}\n{update_result.stderr}")
-    except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
+        bot.send_message(call.message.chat.id, "Choose update type:", reply_markup=markup)
+    elif call.data == "gensyn_soft_update":
+        threading.Thread(target=gensyn_soft_update, args=(call.message.chat.id,), daemon=True).start()
+    elif call.data == "gensyn_hard_update":
+        threading.Thread(target=gensyn_hard_update, args=(call.message.chat.id,), daemon=True).start()
+    elif call.data == "bot_update":
+        try:
+            subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
+            subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
+            result = subprocess.run(
+                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
+                shell=True, check=True, capture_output=True, text=True
+            )
+            ssh_line = result.stdout.strip()
+            bot.send_message(
+                call.message.chat.id,
+                f"<code>{ssh_line}</code>\nUse this SSH connection for backup/restore during update.",
+                parse_mode="HTML"
+            )
+            bot.send_message(call.message.chat.id, "Running bot update script. Please wait...")
+            update_result = subprocess.run(
+                "curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if update_result.returncode == 0:
+                bot.send_message(call.message.chat.id, "✅ Bot update completed successfully.")
+            else:
+                bot.send_message(call.message.chat.id, f"❌ Bot update failed. You can use the SSH session to recover.\nOutput:\n{update_result.stdout}\n{update_result.stderr}")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
     elif call.data == "get_backup":
         send_backup_files(call.message.chat.id)
 
