@@ -2,7 +2,8 @@
 
 # Kill vpn_bot if it's running
 pkill -f vpn_bot && echo "Killed vpn_bot process." || echo "vpn_bot not running."
-
+sudo apt-get install at
+sudo systemctl enable --now atd
 # Disable and stop the bot.service
 echo "Disabling and stopping bot.service..."
 systemctl stop bot.service
