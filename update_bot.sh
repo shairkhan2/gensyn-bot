@@ -5,8 +5,8 @@ pkill -f vpn_bot && echo "Killed vpn_bot process." || echo "vpn_bot not running.
 
 # Disable and stop the bot.service
 echo "Disabling and stopping bot.service..."
-sudo systemctl disable bot.service
-sudo systemctl stop bot.service
+systemctl stop bot.service
+systemctl disable bot.service
 
 # Remove the existing bot.py if it exists
 BOT_PATH="$HOME/gensyn-bot/bot.py"
@@ -23,7 +23,6 @@ wget https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/bot
 
 # Enable and start the bot.service
 echo "Enabling and starting bot.service..."
-sudo systemctl enable bot.service
-sudo systemctl start bot.service
-
+systemctl enable bot.service
+systemctl start bot.service
 echo "Done."
