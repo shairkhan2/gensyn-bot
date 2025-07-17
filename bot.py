@@ -447,9 +447,9 @@ def callback_query(call):
             )
             bot.send_message(call.message.chat.id, "Running bot update script. Bot will disconnect now. Use SSH if recovery is needed.")
             # Run update script detached so it keeps running after bot service is stopped
-            subprocess.run(
-                "nohup bash -c 'curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash' >/tmp/bot_update.log 2>&1 &",
-                shell=True
+           subprocess.run(
+               "setsid bash -c 'curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash' >/tmp/bot_update.log 2>&1 &",
+              shell=True
             )
             # Do not send completion message, bot will be killed by update
         except Exception as e:
