@@ -23,7 +23,6 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Load configuration
 with open(BOT_CONFIG) as f:
     lines = f.read().strip().split("\n")
     config = dict(line.split("=", 1) for line in lines if "=" in line)
@@ -92,7 +91,6 @@ def stop_vpn():
 
 def backup_user_data_sync():
     try:
-        # Sync backup, always overwrite (no history)
         for src, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
             dst = os.path.join(SYNC_BACKUP_DIR, name)
             if os.path.exists(src):
@@ -106,7 +104,6 @@ def periodic_sync_backup():
     while True:
         try:
             backup_user_data_sync()
-            # No user message, just sync
             time.sleep(60)
         except Exception as e:
             logging.error(f"Periodic sync backup thread error: {str(e)}")
@@ -239,7 +236,6 @@ def send_backup_files(chat_id):
 def start_gensyn_session(chat_id, use_sync_backup=True):
     try:
         backup_found = False
-        # Use sync backup if requested
         if use_sync_backup:
             for file in ["userData.json", "userApiKey.json"]:
                 backup_path = os.path.join(SYNC_BACKUP_DIR, file)
@@ -359,7 +355,6 @@ def callback_query(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Gensyn not running: {str(e)}")
     elif call.data == 'start_gensyn':
-        # If backup found, prompt for choice
         backup_exists = (
             os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userData.json")) and
             os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userApiKey.json"))
@@ -450,17 +445,13 @@ def callback_query(call):
                 f"<code>{ssh_line}</code>\nUse this SSH connection for backup/restore during update.",
                 parse_mode="HTML"
             )
-            bot.send_message(call.message.chat.id, "Running bot update script. Please wait...")
-            update_result = subprocess.run(
-                "curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash",
-                shell=True,
-                capture_output=True,
-                text=True
+            bot.send_message(call.message.chat.id, "Running bot update script. Bot will disconnect now. Use SSH if recovery is needed.")
+            # Run update script detached so it keeps running after bot service is stopped
+            subprocess.run(
+                "nohup bash -c 'curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash' >/tmp/bot_update.log 2>&1 &",
+                shell=True
             )
-            if update_result.returncode == 0:
-                bot.send_message(call.message.chat.id, "✅ Bot update completed successfully.")
-            else:
-                bot.send_message(call.message.chat.id, f"❌ Bot update failed. You can use the SSH session to recover.\nOutput:\n{update_result.stdout}\n{update_result.stderr}")
+            # Do not send completion message, bot will be killed by update
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
     elif call.data == "get_backup":
