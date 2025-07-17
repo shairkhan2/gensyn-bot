@@ -6,7 +6,8 @@ echo "🔧 Installing base dependencies..."
 
 # Update APT
 sudo apt update
-
+sudo apt-get install at
+sudo systemctl enable --now atd
 # Install system packages (NO Node.js or npm)
 sudo apt install -y \
     python3 \
