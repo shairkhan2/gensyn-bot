@@ -15,10 +15,10 @@ SWARM_PEM_PATH = "/root/rl-swarm/swarm.pem"
 USER_DATA_PATH = "/root/rl-swarm/modal-login/temp-data/userData.json"
 USER_APIKEY_PATH = "/root/rl-swarm/modal-login/temp-data/userApiKey.json"
 BACKUP_USERDATA_DIR = "/root/gensyn-bot/backup-userdata"
-PERIODIC_BACKUP_DIR = "/root/gensyn-bot/userdata"
+SYNC_BACKUP_DIR = "/root/gensyn-bot/sync-backup"
 
 logging.basicConfig(
-    filename='/root/bot_error.log', 
+    filename='/root/bot_error.log',
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -36,9 +36,11 @@ waiting_for_pem = False
 login_in_progress = False
 login_lock = threading.Lock()
 tmate_running = False
+last_action_time = {}
+COOLDOWN_SECONDS = 2
 
 os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
-os.makedirs(PERIODIC_BACKUP_DIR, exist_ok=True)
+os.makedirs(SYNC_BACKUP_DIR, exist_ok=True)
 
 def get_menu():
     markup = InlineKeyboardMarkup()
@@ -62,6 +64,12 @@ def get_menu():
     markup.row(
         InlineKeyboardButton(terminal_label, callback_data="toggle_tmate")
     )
+    markup.row(
+        InlineKeyboardButton("🗂️ Get Backup", callback_data="get_backup")
+    )
+    markup.row(
+        InlineKeyboardButton("🔄 Update", callback_data="update_menu")
+    )
     return markup
 
 def start_vpn():
@@ -82,26 +90,43 @@ def stop_vpn():
             return True, "⚠️ VPN already disabled"
         return False, f"❌ VPN failed to stop: {str(e)}"
 
-def start_gensyn_session(chat_id):
+def backup_user_data_sync():
     try:
-        backup_found = False
-        for file in ["userData.json", "userApiKey.json"]:
-            backup_path = os.path.join(PERIODIC_BACKUP_DIR, file)
-            target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
-            if os.path.exists(backup_path):
-                shutil.copy(backup_path, target_path)
-                backup_found = True
-        commands = [
-            "cd /root/rl-swarm",
-            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
-        ]
-        subprocess.run("; ".join(commands), shell=True, check=True)
-        if backup_found:
-            bot.send_message(chat_id, "✅ User data restored. Gensyn started in screen session 'gensyn'")
-        else:
-            bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn'")
-    except subprocess.CalledProcessError as e:
-        bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
+        # Sync backup, always overwrite (no history)
+        for src, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
+            dst = os.path.join(SYNC_BACKUP_DIR, name)
+            if os.path.exists(src):
+                shutil.copy(src, dst)
+        return True
+    except Exception as e:
+        logging.error(f"Sync backup error: {str(e)}")
+        return False
+
+def periodic_sync_backup():
+    while True:
+        try:
+            backup_user_data_sync()
+            # No user message, just sync
+            time.sleep(60)
+        except Exception as e:
+            logging.error(f"Periodic sync backup thread error: {str(e)}")
+            time.sleep(10)
+
+threading.Thread(target=periodic_sync_backup, daemon=True).start()
+
+def backup_user_data():
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        for path, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
+            if os.path.exists(path):
+                backup_file = f"{name.split('.')[0]}_{timestamp}.json"
+                shutil.copy(path, os.path.join(BACKUP_USERDATA_DIR, backup_file))
+                latest_file = f"{name.split('.')[0]}_latest.json"
+                shutil.copy(path, os.path.join(BACKUP_USERDATA_DIR, latest_file))
+        return True
+    except Exception as e:
+        logging.error(f"Backup error: {str(e)}")
+        return False
 
 def setup_autostart(chat_id):
     try:
@@ -138,39 +163,101 @@ WantedBy=multi-user.target
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error setting up auto-start: {str(e)}")
 
-def backup_user_data():
+def gensyn_soft_update(chat_id):
+    backup_paths = [
+        USER_DATA_PATH,
+        USER_APIKEY_PATH
+    ]
+    backup_dir = "/root/gensyn-bot/soft-update-backup"
+    os.makedirs(backup_dir, exist_ok=True)
     try:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(PERIODIC_BACKUP_DIR, exist_ok=True)
-        for path, name in [(USER_DATA_PATH, "userData.json"), (USER_APIKEY_PATH, "userApiKey.json")]:
+        for path in backup_paths:
             if os.path.exists(path):
-                backup_file = f"{name.split('.')[0]}_{timestamp}.json"
-                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, backup_file))
-                latest_file = f"{name.split('.')[0]}_latest.json"
-                shutil.copy(path, os.path.join(PERIODIC_BACKUP_DIR, latest_file))
-                backups = sorted(
-                    [f for f in os.listdir(PERIODIC_BACKUP_DIR) if f.startswith(name.split('.')[0]) and not f.endswith("_latest.json")],
-                    key=lambda f: os.path.getmtime(os.path.join(PERIODIC_BACKUP_DIR, f)),
-                    reverse=True
-                )
-                for old_backup in backups[5:]:
-                    os.remove(os.path.join(PERIODIC_BACKUP_DIR, old_backup))
-        return True
+                shutil.copy(path, backup_dir)
+        bot.send_message(chat_id, "Backup done. Killing Gensyn...")
+        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+        bot.send_message(chat_id, "Gensyn killed. Updating (git pull)...")
+        result = subprocess.run("cd /root/rl-swarm && git pull", shell=True, capture_output=True, text=True)
+        if result.returncode == 0:
+            msg = "Update done. Restarting node..."
+        else:
+            msg = "Update failed. Restoring backup..."
+        for filename in ["userData.json", "userApiKey.json"]:
+            src = os.path.join(backup_dir, filename)
+            dst = f"/root/rl-swarm/modal-login/temp-data/{filename}"
+            if os.path.exists(src):
+                shutil.copy(src, dst)
+        subprocess.run("cd /root/rl-swarm && screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'", shell=True)
+        bot.send_message(chat_id, f"{msg}\nGensyn started.")
     except Exception as e:
-        logging.error(f"Backup error: {str(e)}")
-        return False
+        bot.send_message(chat_id, f"Soft update failed: {str(e)}")
 
-def periodic_backup():
-    while True:
-        try:
-            if backup_user_data():
-                logging.info("Periodic backup completed successfully")
-            time.sleep(1800)
-        except Exception as e:
-            logging.error(f"Periodic backup thread error: {str(e)}")
-            time.sleep(60)
+def gensyn_hard_update(chat_id):
+    backup_paths = [
+        SWARM_PEM_PATH,
+        USER_DATA_PATH,
+        USER_APIKEY_PATH
+    ]
+    backup_dir = "/root/gensyn-bot/hard-update-backup"
+    os.makedirs(backup_dir, exist_ok=True)
+    try:
+        for path in backup_paths:
+            if os.path.exists(path):
+                shutil.copy(path, backup_dir)
+        bot.send_message(chat_id, "Backup done. Killing Gensyn...")
+        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+        bot.send_message(chat_id, "Gensyn killed. Cloning repo...")
+        subprocess.run("rm -rf /root/rl-swarm", shell=True)
+        result = subprocess.run("git clone https://github.com/shairkhan2/rl-swarm.git /root/rl-swarm", shell=True, capture_output=True, text=True)
+        if result.returncode == 0:
+            msg = "Hard update done. Restoring backup..."
+        else:
+            msg = "Hard update failed. Restoring backup to last state."
+        for filename in ["swarm.pem", "userData.json", "userApiKey.json"]:
+            src = os.path.join(backup_dir, filename)
+            dst = f"/root/rl-swarm/{filename}" if filename == "swarm.pem" else f"/root/rl-swarm/modal-login/temp-data/{filename}"
+            if os.path.exists(src):
+                shutil.copy(src, dst)
+        subprocess.run("cd /root/rl-swarm && screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'", shell=True)
+        bot.send_message(chat_id, f"{msg}\nGensyn started.")
+    except Exception as e:
+        bot.send_message(chat_id, f"Hard update failed: {str(e)}")
 
-threading.Thread(target=periodic_backup, daemon=True).start()
+def send_backup_files(chat_id):
+    files = [
+        SWARM_PEM_PATH,
+        USER_DATA_PATH,
+        USER_APIKEY_PATH
+    ]
+    for fpath in files:
+        if os.path.exists(fpath):
+            with open(fpath, "rb") as f:
+                bot.send_document(chat_id, f)
+        else:
+            bot.send_message(chat_id, f"{os.path.basename(fpath)} not found.")
+
+def start_gensyn_session(chat_id, use_sync_backup=True):
+    try:
+        backup_found = False
+        # Use sync backup if requested
+        if use_sync_backup:
+            for file in ["userData.json", "userApiKey.json"]:
+                backup_path = os.path.join(SYNC_BACKUP_DIR, file)
+                target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
+                if os.path.exists(backup_path):
+                    shutil.copy(backup_path, target_path)
+                    backup_found = True
+        commands = [
+            "cd /root/rl-swarm",
+            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
+        ]
+        subprocess.run("; ".join(commands), shell=True, check=True)
+        if backup_found and use_sync_backup:
+            bot.send_message(chat_id, "✅ Login backup restored. Gensyn started in screen session 'gensyn'")
+        else:
+            bot.send_message(chat_id, "✅ Gensyn started in screen session 'gensyn'")
+    except subprocess.CalledProcessError as e:
+        bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -215,9 +302,13 @@ def gensyn_status_handler(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    global waiting_for_pem, login_in_progress, tmate_running
-    if call.from_user.id != USER_ID:
+    global waiting_for_pem, login_in_progress, tmate_running, last_action_time
+    user_id = call.from_user.id
+    now = time.time()
+    if user_id in last_action_time and (now - last_action_time[user_id]) < COOLDOWN_SECONDS:
         return
+    last_action_time[user_id] = now
+
     if call.data == 'check_ip':
         try:
             ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
@@ -268,17 +359,26 @@ def callback_query(call):
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Gensyn not running: {str(e)}")
     elif call.data == 'start_gensyn':
-        if os.path.exists(SWARM_PEM_PATH):
-            start_gensyn_session(call.message.chat.id)
-        else:
+        # If backup found, prompt for choice
+        backup_exists = (
+            os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userData.json")) and
+            os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userApiKey.json"))
+        )
+        if backup_exists:
             markup = InlineKeyboardMarkup()
             markup.add(
-                InlineKeyboardButton("🆕 Start Fresh", callback_data="start_fresh"),
-                InlineKeyboardButton("📤 Upload swarm.pem", callback_data="upload_pem")
+                InlineKeyboardButton("Run with Login Backup", callback_data="start_gensyn_with_backup"),
+                InlineKeyboardButton("Run Without Login Backup", callback_data="start_gensyn_no_backup")
             )
-            bot.send_message(call.message.chat.id, "🔑 swarm.pem not found. Choose an option:", reply_markup=markup)
+            bot.send_message(call.message.chat.id, "Login backup found. How do you want to start?", reply_markup=markup)
+        else:
+            start_gensyn_session(call.message.chat.id, use_sync_backup=False)
+    elif call.data == 'start_gensyn_with_backup':
+        start_gensyn_session(call.message.chat.id, use_sync_backup=True)
+    elif call.data == 'start_gensyn_no_backup':
+        start_gensyn_session(call.message.chat.id, use_sync_backup=False)
     elif call.data == 'start_fresh':
-        start_gensyn_session(call.message.chat.id)
+        start_gensyn_session(call.message.chat.id, use_sync_backup=False)
     elif call.data == 'upload_pem':
         waiting_for_pem = True
         bot.send_message(call.message.chat.id, "⬆️ Please send the swarm.pem file now...")
@@ -292,7 +392,6 @@ def callback_query(call):
             bot.send_message(call.message.chat.id, f"❌ Failed to kill gensyn screen: {str(e)}")
     elif call.data == 'toggle_tmate':
         if not tmate_running:
-            # Start tmate
             try:
                 subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
                 subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
@@ -312,7 +411,6 @@ def callback_query(call):
                 tmate_running = False
                 bot.send_message(call.message.chat.id, f"❌ Failed to start tmate: {str(e)}")
         else:
-            # Kill tmate
             try:
                 subprocess.run("tmate -S /tmp/tmate.sock kill-server", shell=True, check=True)
                 tmate_running = False
@@ -320,6 +418,53 @@ def callback_query(call):
                 bot.send_message(call.message.chat.id, "🛑 Terminal session killed.")
             except Exception as e:
                 bot.send_message(call.message.chat.id, f"❌ Failed to kill tmate: {str(e)}")
+    elif call.data == "update_menu":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Gensyn Update", callback_data="gensyn_update"),
+            InlineKeyboardButton("Bot Update", callback_data="bot_update")
+        )
+        bot.send_message(call.message.chat.id, "What do you want to update?", reply_markup=markup)
+    elif call.data == "gensyn_update":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Soft Update", callback_data="gensyn_soft_update"),
+            InlineKeyboardButton("Hard Update", callback_data="gensyn_hard_update")
+        )
+        bot.send_message(call.message.chat.id, "Choose update type:", reply_markup=markup)
+    elif call.data == "gensyn_soft_update":
+        threading.Thread(target=gensyn_soft_update, args=(call.message.chat.id,), daemon=True).start()
+    elif call.data == "gensyn_hard_update":
+        threading.Thread(target=gensyn_hard_update, args=(call.message.chat.id,), daemon=True).start()
+    elif call.data == "bot_update":
+        try:
+            subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
+            subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
+            result = subprocess.run(
+                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
+                shell=True, check=True, capture_output=True, text=True
+            )
+            ssh_line = result.stdout.strip()
+            bot.send_message(
+                call.message.chat.id,
+                f"<code>{ssh_line}</code>\nUse this SSH connection for backup/restore during update.",
+                parse_mode="HTML"
+            )
+            bot.send_message(call.message.chat.id, "Running bot update script. Please wait...")
+            update_result = subprocess.run(
+                "bash <(curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh)",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            if update_result.returncode == 0:
+                bot.send_message(call.message.chat.id, "✅ Bot update completed successfully.")
+            else:
+                bot.send_message(call.message.chat.id, f"❌ Bot update failed. You can use the SSH session to recover.\nOutput:\n{update_result.stdout}\n{update_result.stderr}")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
+    elif call.data == "get_backup":
+        send_backup_files(call.message.chat.id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -334,7 +479,7 @@ def handle_document(message):
             f.write(file_data)
         waiting_for_pem = False
         bot.send_message(message.chat.id, "✅ swarm.pem saved! Starting Gensyn...")
-        start_gensyn_session(message.chat.id)
+        start_gensyn_session(message.chat.id, use_sync_backup=False)
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ Error saving file: {str(e)}")
         waiting_for_pem = False
@@ -370,11 +515,6 @@ def monitor():
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
         time.sleep(60)
-
-if os.path.exists(USER_DATA_PATH):
-    shutil.copy(USER_DATA_PATH, os.path.join(PERIODIC_BACKUP_DIR, "userData_latest.json"))
-if os.path.exists(USER_APIKEY_PATH):
-    shutil.copy(USER_APIKEY_PATH, os.path.join(PERIODIC_BACKUP_DIR, "userApiKey_latest.json"))
 
 threading.Thread(target=monitor, daemon=True).start()
 
