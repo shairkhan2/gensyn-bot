@@ -451,11 +451,11 @@ def callback_query(call):
                 parse_mode="HTML"
             )
             bot.send_message(call.message.chat.id, "Running bot update script. Please wait...")
-            update_result = subprocess.run(
-              "curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash",
-               shell=True,
-               capture_output=True,
-               text=True
+           update_result = subprocess.run(
+             "curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash",
+              shell=True,
+              capture_output=True,
+              text=True
             )
             if update_result.returncode == 0:
                 bot.send_message(call.message.chat.id, "✅ Bot update completed successfully.")
