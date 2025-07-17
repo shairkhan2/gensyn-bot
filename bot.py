@@ -234,6 +234,19 @@ def send_backup_files(chat_id):
             bot.send_message(chat_id, f"{os.path.basename(fpath)} not found.")
 
 def start_gensyn_session(chat_id, use_sync_backup=True):
+    # Check if swarm.pem exists
+    if not os.path.exists(SWARM_PEM_PATH):
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Upload old swarm.pem", callback_data="upload_pem"),
+            InlineKeyboardButton("Start Fresh Node", callback_data="start_fresh")
+        )
+        bot.send_message(
+            chat_id,
+            "❗ swarm.pem not found! If you have a backup of your old Gensyn node, please upload it.\nOtherwise, start fresh (new node, new keys).",
+            reply_markup=markup
+        )
+        return
     try:
         backup_found = False
         if use_sync_backup:
@@ -446,15 +459,11 @@ def callback_query(call):
                 parse_mode="HTML"
             )
             bot.send_message(call.message.chat.id, "Running bot update script. Bot will disconnect now. Use SSH if recovery is needed.")
-            # Method 3: Write to a .sh file and run with nohup so update continues after bot stops
             update_script_path = "/tmp/bot_update_run.sh"
             with open(update_script_path, "w") as f:
                 f.write("curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash\n")
-            # Make sure it's executable
             os.chmod(update_script_path, 0o700)
-            # Run the script detached
             subprocess.run(f"echo 'bash {update_script_path} >/tmp/bot_update.log 2>&1' | at now + 1 minute", shell=True)
-            # No completion message, bot will be killed by update
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
     elif call.data == "get_backup":
