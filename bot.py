@@ -567,6 +567,29 @@ def callback_query(call):
         elif call.data == "get_backup":
             send_backup_files(call.message.chat.id)
             
+        elif call.data == "wandb_send_log":
+            try:
+                # Find the most recent log file
+                latest_log = None
+                if os.path.exists(WANDB_LOG_DIR):
+                    for root, dirs, files in os.walk(WANDB_LOG_DIR):
+                        for file in files:
+                            if file.endswith('.log'):
+                                file_path = os.path.join(root, file)
+                                if not latest_log or os.path.getmtime(file_path) > os.path.getmtime(latest_log):
+                                    latest_log = file_path
+                
+                if latest_log and os.path.exists(latest_log):
+                    with open(latest_log, "rb") as f:
+                        bot.send_document(call.message.chat.id, f)
+                else:
+                    bot.send_message(call.message.chat.id, "No log file found.")
+            except Exception as e:
+                bot.send_message(call.message.chat.id, f"Error sending log: {str(e)}")
+                
+        elif call.data == "wandb_skip_log":
+            bot.send_message(call.message.chat.id, "Log skipped.")
+            
     except Exception as e:
         logging.error(f"Error in callback_query: {str(e)}")
         bot.send_message(call.message.chat.id, "❌ An error occurred. Check logs.")
@@ -637,7 +660,7 @@ def monitor():
                 else:
                     last_stale_sent_ts = None
                     
-            # 4. WANDB monitoring
+            # 4. WANDB monitoring - simplified
             new_folders = []
             new_files = []
             if os.path.exists(WANDB_LOG_DIR):
@@ -654,19 +677,13 @@ def monitor():
                             new_files.append(path)
                             
                 if new_folders or new_files:
-                    msg = "🪄 wandb detected:\n"
-                    if new_folders:
-                        msg += "New folders:\n" + "\n".join(new_folders) + "\n"
-                    if new_files:
-                        msg += "New files:\n" + "\n".join(new_files)
-                    bot.send_message(USER_ID, msg.strip())
-                    
-                    if new_files:
-                        try:
-                            with open(new_files[0], "rb") as f:
-                                bot.send_document(USER_ID, f)
-                        except Exception:
-                            pass
+                    # Simple message with Yes/No buttons
+                    markup = InlineKeyboardMarkup()
+                    markup.add(
+                        InlineKeyboardButton("Yes", callback_data="wandb_send_log"),
+                        InlineKeyboardButton("No", callback_data="wandb_skip_log")
+                    )
+                    bot.send_message(USER_ID, "🪄 WANDB detected. Want log file?", reply_markup=markup)
                             
             time.sleep(60)
             
