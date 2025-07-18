@@ -524,9 +524,9 @@ def check_login_timeout(chat_id):
 def monitor():
     previous_ip = ''
     previous_alive = None
-    last_log_ts = None
     wandb_file_cache = set()
     wandb_folder_cache = set()
+    last_stale_sent_ts = None  # Track the last log timestamp we alerted for staleness
     while True:
         try:
             # 1. API status
@@ -547,11 +547,11 @@ def monitor():
                 status = '✅ Online' if alive else '❌ Offline'
                 bot.send_message(USER_ID, f"⚠️ localhost:3000 status changed: {status}")
             previous_alive = alive
-            # 3. Log freshness
+            # 3. Log freshness (single message per stale period, no new line messages)
+            latest_ts = None
             if os.path.exists(GENSYN_LOG_PATH):
                 with open(GENSYN_LOG_PATH, "r") as f:
                     lines = f.readlines()[-50:]
-                latest_ts = None
                 for line in reversed(lines):
                     if "] - " in line:
                         try:
@@ -562,30 +562,46 @@ def monitor():
                         except Exception:
                             continue
                 if latest_ts:
-                    last_log_ts = latest_ts
-                    # If no update for 90 minutes
-                    if datetime.utcnow() - latest_ts > timedelta(minutes=90):
-                        bot.send_message(USER_ID, f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!")
-            # 4. WANDB new file/folder detection and notification
+                    # Only send alert if log is stale AND we have not already sent a message for this timestamp
+                    if (datetime.utcnow() - latest_ts > timedelta(minutes=90)):
+                        if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
+                            bot.send_message(
+                                USER_ID,
+                                f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!"
+                            )
+                            last_stale_sent_ts = latest_ts
+                    else:
+                        # If log is fresh again, reset so future staleness can alert
+                        last_stale_sent_ts = None
+            # 4. WANDB new file/folder detection and notification (single message + file)
+            new_folders = []
+            new_files = []
             if os.path.exists(WANDB_LOG_DIR):
                 for root, dirs, files in os.walk(WANDB_LOG_DIR):
-                    # Check for new folders
                     for d in dirs:
                         folder_path = os.path.join(root, d)
                         if folder_path not in wandb_folder_cache:
                             wandb_folder_cache.add(folder_path)
-                            bot.send_message(USER_ID, f"🪄 wandb detected new folder: {folder_path}")
-                    # Check for new files
+                            new_folders.append(folder_path)
                     for name in files:
                         path = os.path.join(root, name)
                         if path not in wandb_file_cache:
                             wandb_file_cache.add(path)
-                            bot.send_message(USER_ID, f"🪄 wandb detected new file: {path}")
-                            try:
-                                with open(path, "rb") as f:
-                                    bot.send_document(USER_ID, f)
-                            except Exception:
-                                pass
+                            new_files.append(path)
+                if new_folders or new_files:
+                    msg = "🪄 wandb detected:\n"
+                    if new_folders:
+                        msg += "New folders:\n" + "\n".join(new_folders) + "\n"
+                    if new_files:
+                        msg += "New files:\n" + "\n".join(new_files)
+                    bot.send_message(USER_ID, msg.strip())
+                    # Send only the first new file, if any
+                    if new_files:
+                        try:
+                            with open(new_files[0], "rb") as f:
+                                bot.send_document(USER_ID, f)
+                        except Exception:
+                            pass
             time.sleep(60)
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
