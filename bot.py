@@ -307,21 +307,6 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
     except Exception as e:
         return f"Error reading log: {str(e)}"
 
-def get_wandb_new_files(last_checked, wandb_dir=WANDB_LOG_DIR):
-    new_files = []
-    if not os.path.exists(wandb_dir):
-        return []
-    for root, dirs, files in os.walk(wandb_dir):
-        for name in files:
-            try:
-                path = os.path.join(root, name)
-                stat = os.stat(path)
-                if stat.st_mtime > last_checked:
-                    new_files.append(path)
-            except Exception:
-                continue
-    return new_files
-
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
@@ -499,19 +484,8 @@ def callback_query(call):
         threading.Thread(target=gensyn_hard_update, args=(call.message.chat.id,), daemon=True).start()
     elif call.data == "bot_update":
         try:
-            subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
-            subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
-            result = subprocess.run(
-                "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
-                shell=True, check=True, capture_output=True, text=True
-            )
-            ssh_line = result.stdout.strip()
-            bot.send_message(
-                call.message.chat.id,
-                f"<code>{ssh_line}</code>\nUse this SSH connection for backup/restore during update.",
-                parse_mode="HTML"
-            )
-            bot.send_message(call.message.chat.id, "Running bot update script. Bot will disconnect now. Use SSH if recovery is needed.")
+            # No SSH code, just notify user about update start
+            bot.send_message(call.message.chat.id, "Bot update started. Bot will be back in about 1 minute.")
             update_script_path = "/tmp/bot_update_run.sh"
             with open(update_script_path, "w") as f:
                 f.write("curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash\n")
@@ -552,6 +526,7 @@ def monitor():
     previous_alive = None
     last_log_ts = None
     wandb_file_cache = set()
+    wandb_folder_cache = set()
     while True:
         try:
             # 1. API status
@@ -591,17 +566,26 @@ def monitor():
                     # If no update for 90 minutes
                     if datetime.utcnow() - latest_ts > timedelta(minutes=90):
                         bot.send_message(USER_ID, f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!")
-            # 4. WANDB new file detection
+            # 4. WANDB new file/folder detection and notification
             if os.path.exists(WANDB_LOG_DIR):
-                new_files = []
                 for root, dirs, files in os.walk(WANDB_LOG_DIR):
+                    # Check for new folders
+                    for d in dirs:
+                        folder_path = os.path.join(root, d)
+                        if folder_path not in wandb_folder_cache:
+                            wandb_folder_cache.add(folder_path)
+                            bot.send_message(USER_ID, f"🪄 wandb detected new folder: {folder_path}")
+                    # Check for new files
                     for name in files:
                         path = os.path.join(root, name)
                         if path not in wandb_file_cache:
                             wandb_file_cache.add(path)
-                            new_files.append(path)
-                if new_files:
-                    bot.send_message(USER_ID, f"🪄 wandb detected new files:\n" + "\n".join(new_files[:10]))
+                            bot.send_message(USER_ID, f"🪄 wandb detected new file: {path}")
+                            try:
+                                with open(path, "rb") as f:
+                                    bot.send_document(USER_ID, f)
+                            except Exception:
+                                pass
             time.sleep(60)
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
