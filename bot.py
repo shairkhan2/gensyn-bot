@@ -660,27 +660,40 @@ def monitor():
     wandb_file_cache = set()
     wandb_folder_cache = set()
     last_stale_sent_ts = None
-    
+    previous_localhost_alive = None
+
     while True:
         try:
-            # 1. API status
+            # 1. API status (using check_gensyn_api)
             alive = check_gensyn_api()
-            
+
+            # 1a. Localhost:3000 status (direct monitoring)
+            try:
+                response = requests.get("http://localhost:3000", timeout=3)
+                localhost_alive = "Sign in to Gensyn" in response.text
+            except Exception:
+                localhost_alive = False
+
+            if previous_localhost_alive is not None and localhost_alive != previous_localhost_alive:
+                status = '✅ Online' if localhost_alive else '❌ Offline'
+                bot.send_message(USER_ID, f"⚠️ localhost:3000 status changed: {status}")
+            previous_localhost_alive = localhost_alive
+
             # 2. IP change
             try:
                 ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
             except:
                 ip = "Unknown"
-                
+
             if ip and ip != previous_ip:
                 bot.send_message(USER_ID, f"⚠️ IP changed: {ip}")
                 previous_ip = ip
-                
+
             if previous_alive is not None and alive != previous_alive:
                 status = '✅ Online' if alive else '❌ Offline'
                 bot.send_message(USER_ID, f"⚠️ API status changed: {status}")
             previous_alive = alive
-            
+
             # 3. Log freshness
             log_data = get_gensyn_log_status()
             if log_data and log_data.get("timestamp"):
@@ -694,7 +707,7 @@ def monitor():
                         last_stale_sent_ts = latest_ts
                 else:
                     last_stale_sent_ts = None
-                    
+
             # 4. WANDB monitoring - simplified
             new_folders = []
             new_files = []
@@ -710,18 +723,17 @@ def monitor():
                         if path not in wandb_file_cache:
                             wandb_file_cache.add(path)
                             new_files.append(path)
-                            
+
                 if new_folders or new_files:
-                    # Simple message with Yes/No buttons
                     markup = InlineKeyboardMarkup()
                     markup.add(
                         InlineKeyboardButton("Yes", callback_data="wandb_send_log"),
                         InlineKeyboardButton("No", callback_data="wandb_skip_log")
                     )
                     bot.send_message(USER_ID, "🪄 WANDB detected. Want log file?", reply_markup=markup)
-                            
+
             time.sleep(60)
-            
+
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
             time.sleep(10)
@@ -732,6 +744,4 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
-
-
 
