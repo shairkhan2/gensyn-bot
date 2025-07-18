@@ -5,7 +5,7 @@ import subprocess
 import logging
 import requests
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -16,6 +16,8 @@ USER_DATA_PATH = "/root/rl-swarm/modal-login/temp-data/userData.json"
 USER_APIKEY_PATH = "/root/rl-swarm/modal-login/temp-data/userApiKey.json"
 BACKUP_USERDATA_DIR = "/root/gensyn-bot/backup-userdata"
 SYNC_BACKUP_DIR = "/root/gensyn-bot/sync-backup"
+GENSYN_LOG_PATH = "/root/rl-swarm/logs/swarm_launcher.log"
+WANDB_LOG_DIR = "/root/rl-swarm/logs/wandb"
 
 logging.basicConfig(
     filename='/root/bot_error.log',
@@ -268,6 +270,58 @@ def start_gensyn_session(chat_id, use_sync_backup=True):
     except subprocess.CalledProcessError as e:
         bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
 
+def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
+    if not os.path.exists(log_path):
+        return "Log file not found."
+    try:
+        with open(log_path, "r") as f:
+            lines = f.readlines()[-50:]
+        latest_ts = None
+        joining_round = None
+        starting_round = None
+        for line in reversed(lines):
+            if "] - " in line:
+                try:
+                    ts_str = line.split("]")[0][1:]
+                    ts = datetime.strptime(ts_str.split(",")[0], "%Y-%m-%d %H:%M:%S")
+                    msg = line.split("] - ", 1)[-1].strip()
+                    if "Joining round" in msg:
+                        joining_round = msg
+                    if "Starting round" in msg:
+                        starting_round = msg
+                    if not latest_ts:
+                        latest_ts = ts
+                    if joining_round and starting_round and latest_ts:
+                        break
+                except Exception:
+                    continue
+        status_lines = []
+        if latest_ts:
+            delta_min = int((datetime.utcnow() - latest_ts).total_seconds() / 60)
+            status_lines.append(f"Last log: {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC ({delta_min} min ago)")
+        if joining_round:
+            status_lines.append(f"Last: {joining_round}")
+        if starting_round:
+            status_lines.append(f"Last: {starting_round}")
+        return "\n".join(status_lines) if status_lines else "No recent log entries found."
+    except Exception as e:
+        return f"Error reading log: {str(e)}"
+
+def get_wandb_new_files(last_checked, wandb_dir=WANDB_LOG_DIR):
+    new_files = []
+    if not os.path.exists(wandb_dir):
+        return []
+    for root, dirs, files in os.walk(wandb_dir):
+        for name in files:
+            try:
+                path = os.path.join(root, name)
+                stat = os.stat(path)
+                if stat.st_mtime > last_checked:
+                    new_files.append(path)
+            except Exception:
+                continue
+    return new_files
+
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
@@ -300,14 +354,20 @@ def handle_credentials(message):
 def gensyn_status_handler(message):
     if message.from_user.id != USER_ID:
         return
+    status_msg = ""
+    # 1. HTTP check
     try:
         response = requests.get("http://localhost:3000", timeout=10)
         if "Sign in to Gensyn" in response.text:
-            bot.send_message(message.chat.id, "✅ Gensyn running")
+            status_msg += "✅ Gensyn API: online\n"
         else:
-            bot.send_message(message.chat.id, f"❌ Gensyn response: {response.status_code}")
+            status_msg += f"❌ Gensyn API: {response.status_code}\n"
     except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Gensyn not running: {str(e)}")
+        status_msg += f"❌ Gensyn API offline: {str(e)}\n"
+    # 2. Log check
+    log_status = get_gensyn_log_status()
+    status_msg += f"\nLog status:\n{log_status}"
+    bot.send_message(message.chat.id, status_msg)
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -359,14 +419,7 @@ def callback_query(call):
         success, message = stop_vpn()
         bot.send_message(call.message.chat.id, message)
     elif call.data == 'gensyn_status':
-        try:
-            response = requests.get("http://localhost:3000", timeout=10)
-            if "Sign in to Gensyn" in response.text:
-                bot.send_message(call.message.chat.id, "✅ Gensyn running")
-            else:
-                bot.send_message(call.message.chat.id, f"❌ Gensyn response: {response.status_code}")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Gensyn not running: {str(e)}")
+        gensyn_status_handler(call.message)
     elif call.data == 'start_gensyn':
         backup_exists = (
             os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userData.json")) and
@@ -497,13 +550,17 @@ def check_login_timeout(chat_id):
 def monitor():
     previous_ip = ''
     previous_alive = None
+    last_log_ts = None
+    wandb_file_cache = set()
     while True:
         try:
+            # 1. API status
             try:
                 response = requests.get('http://localhost:3000', timeout=10)
                 alive = "Sign in to Gensyn" in response.text
             except requests.RequestException:
                 alive = False
+            # 2. IP change
             try:
                 ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
             except:
@@ -515,9 +572,40 @@ def monitor():
                 status = '✅ Online' if alive else '❌ Offline'
                 bot.send_message(USER_ID, f"⚠️ localhost:3000 status changed: {status}")
             previous_alive = alive
+            # 3. Log freshness
+            if os.path.exists(GENSYN_LOG_PATH):
+                with open(GENSYN_LOG_PATH, "r") as f:
+                    lines = f.readlines()[-50:]
+                latest_ts = None
+                for line in reversed(lines):
+                    if "] - " in line:
+                        try:
+                            ts_str = line.split("]")[0][1:]
+                            ts = datetime.strptime(ts_str.split(",")[0], "%Y-%m-%d %H:%M:%S")
+                            latest_ts = ts
+                            break
+                        except Exception:
+                            continue
+                if latest_ts:
+                    last_log_ts = latest_ts
+                    # If no update for 90 minutes
+                    if datetime.utcnow() - latest_ts > timedelta(minutes=90):
+                        bot.send_message(USER_ID, f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!")
+            # 4. WANDB new file detection
+            if os.path.exists(WANDB_LOG_DIR):
+                new_files = []
+                for root, dirs, files in os.walk(WANDB_LOG_DIR):
+                    for name in files:
+                        path = os.path.join(root, name)
+                        if path not in wandb_file_cache:
+                            wandb_file_cache.add(path)
+                            new_files.append(path)
+                if new_files:
+                    bot.send_message(USER_ID, f"🪄 wandb detected new files:\n" + "\n".join(new_files[:10]))
+            time.sleep(60)
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
-        time.sleep(60)
+            time.sleep(10)
 
 threading.Thread(target=monitor, daemon=True).start()
 
