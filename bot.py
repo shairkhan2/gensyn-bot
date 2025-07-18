@@ -270,42 +270,50 @@ def start_gensyn_session(chat_id, use_sync_backup=True):
     except subprocess.CalledProcessError as e:
         bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
 
+# MODIFIED FUNCTION 1
 def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
+    """
+    Parses the last 50 lines of the Gensyn log to find the latest activity.
+    Returns a dictionary with timestamp, joining, and starting round info, or None.
+    """
     if not os.path.exists(log_path):
-        return "Log file not found."
+        return None
+
     try:
         with open(log_path, "r") as f:
             lines = f.readlines()[-50:]
+
         latest_ts = None
         joining_round = None
         starting_round = None
+
         for line in reversed(lines):
             if "] - " in line:
                 try:
                     ts_str = line.split("]")[0][1:]
                     ts = datetime.strptime(ts_str.split(",")[0], "%Y-%m-%d %H:%M:%S")
                     msg = line.split("] - ", 1)[-1].strip()
-                    if "Joining round" in msg:
-                        joining_round = msg
-                    if "Starting round" in msg:
-                        starting_round = msg
+
                     if not latest_ts:
                         latest_ts = ts
-                    if joining_round and starting_round and latest_ts:
+                    if "Joining round" in msg and not joining_round:
+                        joining_round = msg
+                    if "Starting round" in msg and not starting_round:
+                        starting_round = msg
+                    
+                    if latest_ts and joining_round and starting_round:
                         break
-                except Exception:
+                except (ValueError, IndexError):
                     continue
-        status_lines = []
-        if latest_ts:
-            delta_min = int((datetime.utcnow() - latest_ts).total_seconds() / 60)
-            status_lines.append(f"Last log: {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC ({delta_min} min ago)")
-        if joining_round:
-            status_lines.append(f"Last: {joining_round}")
-        if starting_round:
-            status_lines.append(f"Last: {starting_round}")
-        return "\n".join(status_lines) if status_lines else "No recent log entries found."
+        
+        return {
+            "timestamp": latest_ts,
+            "joining": joining_round,
+            "starting": starting_round,
+        }
     except Exception as e:
-        return f"Error reading log: {str(e)}"
+        logging.error(f"Error reading Gensyn log: {str(e)}")
+        return None
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -335,24 +343,50 @@ def handle_credentials(message):
         return
     bot.send_message(message.chat.id, "⚠️ Please send either:\n- Your email address\n- 6-digit OTP code")
 
+# MODIFIED FUNCTION 2
 @bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
+    """
+    Checks Gensyn API and log status, then sends a formatted message to the user.
+    """
     if message.from_user.id != USER_ID:
         return
-    status_msg = ""
-    # 1. HTTP check
+
+    # --- API Status Check ---
+    api_status = "API: ❌ Inactive"
     try:
-        response = requests.get("http://localhost:3000", timeout=10)
-        if "Sign in to Gensyn" in response.text:
-            status_msg += "✅ Gensyn API: online\n"
-        else:
-            status_msg += f"❌ Gensyn API: {response.status_code}\n"
-    except Exception as e:
-        status_msg += f"❌ Gensyn API offline: {str(e)}\n"
-    # 2. Log check
-    log_status = get_gensyn_log_status()
-    status_msg += f"\nLog status:\n{log_status}"
-    bot.send_message(message.chat.id, status_msg)
+        response = requests.get("http://localhost:3000", timeout=5)
+        if response.status_code == 200 and "Sign in to Gensyn" in response.text:
+            api_status = "API: ✅ Online"
+    except requests.RequestException:
+        pass
+
+    # --- Log Status Check ---
+    log_data = get_gensyn_log_status()
+    log_status_lines = []
+
+    if log_data and any(log_data.values()):
+        if log_data.get("timestamp"):
+            ts = log_data["timestamp"]
+            delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
+            log_status_lines.append(f"🕰️ *Last Activity:* {delta_min} mins ago")
+
+        if log_data.get("joining"):
+            joining_text = log_data["joining"].replace("Joining round ", "")
+            log_status_lines.append(f"🤝 *Joining:* `{joining_text}`")
+        
+        if log_data.get("starting"):
+            starting_text = log_data["starting"].replace("Starting round ", "")
+            log_status_lines.append(f"▶️ *Starting:* `{starting_text}`")
+
+    if not log_status_lines:
+        log_status = "Round: No data found"
+    else:
+        log_status = "\n".join(log_status_lines)
+
+    # --- Combine and Send Message ---
+    final_message = f"{api_status}\n\n{log_status}"
+    bot.send_message(message.chat.id, final_message, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
@@ -613,3 +647,4 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
