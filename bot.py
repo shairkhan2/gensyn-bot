@@ -386,13 +386,24 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
 
 def check_gensyn_api():
     """
-    Simple HTTP 200 check
+    Fixed API check for your actual HTML response
     """
     try:
         response = requests.get("http://localhost:3000", timeout=3)
-        return response.status_code == 200
+        if response.status_code == 200:
+            response_text = response.text
+            # Check for the actual title text or other Gensyn indicators
+            if any(indicator in response_text for indicator in [
+                "Sign in to Gensyn Testnet",
+                "Sign in to Gensyn", 
+                "Gensyn Testnet",
+                "__next_error__"
+            ]):
+                return True
+        return False
     except Exception:
         return False
+
 
 def format_gensyn_status():
     """
