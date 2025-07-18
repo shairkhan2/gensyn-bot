@@ -73,59 +73,6 @@ def get_menu():
     )
     return markup
 
-def check_internet_connection():
-    """
-    Check if internet is working by connecting to Google
-    Returns True if connection successful, False otherwise
-    """
-    try:
-        response = requests.get("https://www.google.com/", timeout=10)
-        return response.status_code == 200
-    except Exception:
-        return False
-
-def internet_watchdog():
-    """
-    Monitor internet connectivity and take action if connection fails
-    """
-    failed_attempts = 0
-    max_failures = 5
-    
-    while True:
-        try:
-            if check_internet_connection():
-                failed_attempts = 0  # Reset counter on successful connection
-            else:
-                failed_attempts += 1
-                logging.error(f"Internet check failed. Attempt {failed_attempts}/{max_failures}")
-                
-                if failed_attempts >= max_failures:
-                    try:
-                        # Kill Gensyn screen
-                        subprocess.run("screen -S gensyn -X quit", shell=True, check=False)
-                        
-                        # Turn off WireGuard
-                        subprocess.run(['wg-quick', 'down', 'wg0'], check=False)
-                        
-                        # Wait 2 minutes
-                        time.sleep(120)
-                        
-                        # Send message to user
-                        bot.send_message(USER_ID, "🚨 Internet connection failed 5 times in 10 minutes. Gensyn killed and VPN turned off.")
-                        
-                        # Reset counter
-                        failed_attempts = 0
-                        
-                    except Exception as e:
-                        logging.error(f"Error in internet watchdog action: {str(e)}")
-            
-            # Wait 2 minutes before next check
-            time.sleep(120)
-            
-        except Exception as e:
-            logging.error(f"Error in internet watchdog: {str(e)}")
-            time.sleep(60)
-
 def start_vpn():
     try:
         subprocess.run(['wg-quick', 'up', 'wg0'], check=True)
@@ -386,22 +333,44 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
 
 def check_gensyn_api():
     """
-    Simple HTTP 200 check - any response = online
+    Checks if the Gensyn API is online by making a request to localhost:3000
+    Returns True if online, False otherwise
     """
     try:
-        response = requests.get("http://localhost:3000", timeout=3)
-        return response.status_code == 200
-    except Exception:
+        response = requests.get("http://localhost:3000", timeout=5)
+        if response.status_code == 200:
+            # Check for various indicators that the Gensyn service is running
+            response_text = response.text.lower()
+            gensyn_indicators = [
+                "sign in to gensyn",
+                "gensyn",
+                "__next_error__",
+                "<!doctype html>",
+                "<html"
+            ]
+            
+            # If any of these indicators are found, the service is running
+            for indicator in gensyn_indicators:
+                if indicator in response_text:
+                    return True
         return False
-
+    except Exception as e:
+        logging.error(f"Error checking Gensyn API: {str(e)}")
+        return False
 
 def format_gensyn_status():
     """
     Formats the complete Gensyn status message
     """
-    # Check API status
-    api_online = check_gensyn_api()
-    api_status = "API: ✅ Online" if api_online else "API: ❌ Offline"
+    # Check API status by making a request to localhost:3000
+    try:
+        response = requests.get("http://localhost:3000", timeout=3)
+        if "Sign in to Gensyn" in response.text:
+            api_status = "localhost:3000: ✅ Online"
+        else:
+            api_status = "localhost:3000: ❌ Offline"
+    except Exception:
+        api_status = "localhost:3000: ❌ Offline"
     
     # Check log status
     log_data = get_gensyn_log_status()
@@ -411,20 +380,17 @@ def format_gensyn_status():
         if log_data.get("timestamp"):
             ts = log_data["timestamp"]
             delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
-            log_status_lines.append(f"🕰️ *Last Activity:* {delta_min} mins ago")
+            log_status_lines.append(f"🕰️ Last Activity: {delta_min} mins ago")
 
         if log_data.get("joining"):
-            joining_text = log_data["joining"].replace("Joining round ", "")
-            log_status_lines.append(f"🤝 *Joining:* `{joining_text}`")
-        
-        if log_data.get("starting"):
-            starting_text = log_data["starting"].replace("Starting round ", "")
-            log_status_lines.append(f"▶️ *Starting:* `{starting_text}`")
+            joining_text = log_data["joining"]
+            log_status_lines.append(f"🤝 Joining: {joining_text}")
 
-    if not log_status_lines:
-        log_status = "Round: No data found"
-    else:
-        log_status = "\n".join(log_status_lines)
+        if log_data.get("starting"):
+            starting_text = log_data["starting"]
+            log_status_lines.append(f"▶️ Starting: {starting_text}")
+
+    log_status = "\n".join(log_status_lines) if log_status_lines else "Round: No data found"
 
     return f"{api_status}\n\n{log_status}"
 
@@ -697,7 +663,7 @@ def monitor():
     
     while True:
         try:
-            # 1. API status - using the FIXED function
+            # 1. API status
             alive = check_gensyn_api()
             
             # 2. IP change
@@ -760,10 +726,6 @@ def monitor():
             logging.error("Monitor error: %s", str(e))
             time.sleep(10)
 
-# Start internet watchdog thread
-threading.Thread(target=internet_watchdog, daemon=True).start()
-
-# Start monitor thread
 threading.Thread(target=monitor, daemon=True).start()
 
 try:
