@@ -270,16 +270,15 @@ def start_gensyn_session(chat_id, use_sync_backup=True):
     except subprocess.CalledProcessError as e:
         bot.send_message(chat_id, f"❌ Error starting Gensyn: {str(e)}")
 
-# MODIFIED FUNCTION 1
 def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
     """
     Parses the last 50 lines of the Gensyn log to find the latest activity.
     Returns a dictionary with timestamp, joining, and starting round info, or None.
     """
-    if not os.path.exists(log_path):
-        return None
-
     try:
+        if not os.path.exists(log_path):
+            return None
+
         with open(log_path, "r") as f:
             lines = f.readlines()[-50:]
 
@@ -315,6 +314,51 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
         logging.error(f"Error reading Gensyn log: {str(e)}")
         return None
 
+def check_gensyn_api():
+    """
+    Checks if the Gensyn API is online by making a request to localhost:3000
+    Returns True if online, False otherwise
+    """
+    try:
+        response = requests.get("http://localhost:3000", timeout=5)
+        return response.status_code == 200 and "Sign in to Gensyn" in response.text
+    except Exception as e:
+        logging.error(f"Error checking Gensyn API: {str(e)}")
+        return False
+
+def format_gensyn_status():
+    """
+    Formats the complete Gensyn status message
+    """
+    # Check API status
+    api_online = check_gensyn_api()
+    api_status = "API: ✅ Online" if api_online else "API: ❌ Inactive"
+    
+    # Check log status
+    log_data = get_gensyn_log_status()
+    log_status_lines = []
+
+    if log_data and any(log_data.values()):
+        if log_data.get("timestamp"):
+            ts = log_data["timestamp"]
+            delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
+            log_status_lines.append(f"🕰️ *Last Activity:* {delta_min} mins ago")
+
+        if log_data.get("joining"):
+            joining_text = log_data["joining"].replace("Joining round ", "")
+            log_status_lines.append(f"🤝 *Joining:* `{joining_text}`")
+        
+        if log_data.get("starting"):
+            starting_text = log_data["starting"].replace("Starting round ", "")
+            log_status_lines.append(f"▶️ *Starting:* `{starting_text}`")
+
+    if not log_status_lines:
+        log_status = "Round: No data found"
+    else:
+        log_status = "\n".join(log_status_lines)
+
+    return f"{api_status}\n\n{log_status}"
+
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     if message.from_user.id == USER_ID:
@@ -343,192 +387,189 @@ def handle_credentials(message):
         return
     bot.send_message(message.chat.id, "⚠️ Please send either:\n- Your email address\n- 6-digit OTP code")
 
-# MODIFIED FUNCTION 2
 @bot.message_handler(commands=['gensyn_status'])
 def gensyn_status_handler(message):
-    """
-    Checks Gensyn API and log status, then sends a formatted message to the user.
-    """
     if message.from_user.id != USER_ID:
         return
-
-    # --- API Status Check ---
-    api_status = "API: ❌ Inactive"
     try:
-        response = requests.get("http://localhost:3000", timeout=5)
-        if response.status_code == 200 and "Sign in to Gensyn" in response.text:
-            api_status = "API: ✅ Online"
-    except requests.RequestException:
-        pass
-
-    # --- Log Status Check ---
-    log_data = get_gensyn_log_status()
-    log_status_lines = []
-
-    if log_data and any(log_data.values()):
-        if log_data.get("timestamp"):
-            ts = log_data["timestamp"]
-            delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
-            log_status_lines.append(f"🕰️ *Last Activity:* {delta_min} mins ago")
-
-        if log_data.get("joining"):
-            joining_text = log_data["joining"].replace("Joining round ", "")
-            log_status_lines.append(f"🤝 *Joining:* `{joining_text}`")
-        
-        if log_data.get("starting"):
-            starting_text = log_data["starting"].replace("Starting round ", "")
-            log_status_lines.append(f"▶️ *Starting:* `{starting_text}`")
-
-    if not log_status_lines:
-        log_status = "Round: No data found"
-    else:
-        log_status = "\n".join(log_status_lines)
-
-    # --- Combine and Send Message ---
-    final_message = f"{api_status}\n\n{log_status}"
-    bot.send_message(message.chat.id, final_message, parse_mode="Markdown")
+        status_message = format_gensyn_status()
+        bot.send_message(message.chat.id, status_message, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Error in gensyn_status_handler: {str(e)}")
+        bot.send_message(message.chat.id, "❌ Error getting status. Check logs.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     global waiting_for_pem, login_in_progress, tmate_running, last_action_time
     user_id = call.from_user.id
     now = time.time()
+    
+    if user_id != USER_ID:
+        return
+        
     if user_id in last_action_time and (now - last_action_time[user_id]) < COOLDOWN_SECONDS:
         return
     last_action_time[user_id] = now
 
-    if call.data == 'check_ip':
-        try:
-            ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
-            bot.send_message(call.message.chat.id, f"🌐 Current Public IP: {ip}")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Error checking IP: {str(e)}")
-    elif call.data == 'gensyn_login':
-        global login_lock
-        with login_lock:
-            if login_in_progress:
-                bot.send_message(call.message.chat.id, "⚠️ Login already in progress. Please complete current login first.")
-                return
+    try:
+        if call.data == 'check_ip':
             try:
-                for path in ["/root/email.txt", "/root/otp.txt"]:
-                    if os.path.exists(path):
-                        os.remove(path)
-                login_in_progress = True
-                bot.send_message(call.message.chat.id, "🚀 Starting GENSYN login...")
-                bot.send_message(call.message.chat.id, "📧 Please send your email address")
-                bot.send_message(call.message.chat.id, "🔐 Later, just send the 6-digit OTP code when received")
-                venv_python = "/root/gensyn-bot/.venv/bin/python3"
-                signup_script = "/root/gensyn-bot/signup.py"
-                venv_site_packages = "/root/gensyn-bot/.venv/lib/python3.12/site-packages"
-                with open("/root/signup.log", "w") as f:
-                    subprocess.Popen(
-                        [venv_python, signup_script],
-                        stdout=f,
-                        stderr=subprocess.STDOUT,
-                        env={**os.environ, "PYTHONPATH": venv_site_packages}
-                    )
-                threading.Thread(target=check_login_timeout, args=(call.message.chat.id,)).start()
+                ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
+                bot.send_message(call.message.chat.id, f"🌐 Current Public IP: {ip}")
             except Exception as e:
-                login_in_progress = False
-                bot.send_message(call.message.chat.id, f"❌ Error starting login: {str(e)}")
-    elif call.data == 'vpn_on':
-        success, message = start_vpn()
-        bot.send_message(call.message.chat.id, message)
-    elif call.data == 'vpn_off':
-        success, message = stop_vpn()
-        bot.send_message(call.message.chat.id, message)
-    elif call.data == 'gensyn_status':
-        gensyn_status_handler(call.message)
-    elif call.data == 'start_gensyn':
-        backup_exists = (
-            os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userData.json")) and
-            os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userApiKey.json"))
-        )
-        if backup_exists:
+                bot.send_message(call.message.chat.id, f"❌ Error checking IP: {str(e)}")
+                
+        elif call.data == 'gensyn_login':
+            global login_lock
+            with login_lock:
+                if login_in_progress:
+                    bot.send_message(call.message.chat.id, "⚠️ Login already in progress. Please complete current login first.")
+                    return
+                try:
+                    for path in ["/root/email.txt", "/root/otp.txt"]:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    login_in_progress = True
+                    bot.send_message(call.message.chat.id, "🚀 Starting GENSYN login...")
+                    bot.send_message(call.message.chat.id, "📧 Please send your email address")
+                    bot.send_message(call.message.chat.id, "🔐 Later, just send the 6-digit OTP code when received")
+                    venv_python = "/root/gensyn-bot/.venv/bin/python3"
+                    signup_script = "/root/gensyn-bot/signup.py"
+                    venv_site_packages = "/root/gensyn-bot/.venv/lib/python3.12/site-packages"
+                    with open("/root/signup.log", "w") as f:
+                        subprocess.Popen(
+                            [venv_python, signup_script],
+                            stdout=f,
+                            stderr=subprocess.STDOUT,
+                            env={**os.environ, "PYTHONPATH": venv_site_packages}
+                        )
+                    threading.Thread(target=check_login_timeout, args=(call.message.chat.id,)).start()
+                except Exception as e:
+                    login_in_progress = False
+                    bot.send_message(call.message.chat.id, f"❌ Error starting login: {str(e)}")
+                    
+        elif call.data == 'vpn_on':
+            success, message = start_vpn()
+            bot.send_message(call.message.chat.id, message)
+            
+        elif call.data == 'vpn_off':
+            success, message = stop_vpn()
+            bot.send_message(call.message.chat.id, message)
+            
+        elif call.data == 'gensyn_status':
+            try:
+                status_message = format_gensyn_status()
+                bot.send_message(call.message.chat.id, status_message, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Error in gensyn_status callback: {str(e)}")
+                bot.send_message(call.message.chat.id, "❌ Error getting status. Check logs.")
+                
+        elif call.data == 'start_gensyn':
+            backup_exists = (
+                os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userData.json")) and
+                os.path.exists(os.path.join(SYNC_BACKUP_DIR, "userApiKey.json"))
+            )
+            if backup_exists:
+                markup = InlineKeyboardMarkup()
+                markup.add(
+                    InlineKeyboardButton("Run with Login Backup", callback_data="start_gensyn_with_backup"),
+                    InlineKeyboardButton("Run Without Login Backup", callback_data="start_gensyn_no_backup")
+                )
+                bot.send_message(call.message.chat.id, "Login backup found. How do you want to start?", reply_markup=markup)
+            else:
+                start_gensyn_session(call.message.chat.id, use_sync_backup=False)
+                
+        elif call.data == 'start_gensyn_with_backup':
+            start_gensyn_session(call.message.chat.id, use_sync_backup=True)
+            
+        elif call.data == 'start_gensyn_no_backup':
+            start_gensyn_session(call.message.chat.id, use_sync_backup=False)
+            
+        elif call.data == 'start_fresh':
+            start_gensyn_session(call.message.chat.id, use_sync_backup=False)
+            
+        elif call.data == 'upload_pem':
+            waiting_for_pem = True
+            bot.send_message(call.message.chat.id, "⬆️ Please send the swarm.pem file now...")
+            
+        elif call.data == 'set_autostart':
+            setup_autostart(call.message.chat.id)
+            
+        elif call.data == 'kill_gensyn':
+            try:
+                subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+                bot.send_message(call.message.chat.id, "🛑 gensyn screen killed (and all child processes).")
+            except subprocess.CalledProcessError as e:
+                bot.send_message(call.message.chat.id, f"❌ Failed to kill gensyn screen: {str(e)}")
+                
+        elif call.data == 'toggle_tmate':
+            if not tmate_running:
+                try:
+                    subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
+                    subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
+                    result = subprocess.run(
+                        "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
+                        shell=True, check=True, capture_output=True, text=True
+                    )
+                    ssh_line = result.stdout.strip()
+                    tmate_running = True
+                    bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
+                    bot.send_message(
+                        call.message.chat.id,
+                        f"<code>{ssh_line}</code>",
+                        parse_mode="HTML"
+                    )
+                except Exception as e:
+                    tmate_running = False
+                    bot.send_message(call.message.chat.id, f"❌ Failed to start tmate: {str(e)}")
+            else:
+                try:
+                    subprocess.run("tmate -S /tmp/tmate.sock kill-server", shell=True, check=True)
+                    tmate_running = False
+                    bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
+                    bot.send_message(call.message.chat.id, "🛑 Terminal session killed.")
+                except Exception as e:
+                    bot.send_message(call.message.chat.id, f"❌ Failed to kill tmate: {str(e)}")
+                    
+        elif call.data == "update_menu":
             markup = InlineKeyboardMarkup()
             markup.add(
-                InlineKeyboardButton("Run with Login Backup", callback_data="start_gensyn_with_backup"),
-                InlineKeyboardButton("Run Without Login Backup", callback_data="start_gensyn_no_backup")
+                InlineKeyboardButton("Gensyn Update", callback_data="gensyn_update"),
+                InlineKeyboardButton("Bot Update", callback_data="bot_update")
             )
-            bot.send_message(call.message.chat.id, "Login backup found. How do you want to start?", reply_markup=markup)
-        else:
-            start_gensyn_session(call.message.chat.id, use_sync_backup=False)
-    elif call.data == 'start_gensyn_with_backup':
-        start_gensyn_session(call.message.chat.id, use_sync_backup=True)
-    elif call.data == 'start_gensyn_no_backup':
-        start_gensyn_session(call.message.chat.id, use_sync_backup=False)
-    elif call.data == 'start_fresh':
-        start_gensyn_session(call.message.chat.id, use_sync_backup=False)
-    elif call.data == 'upload_pem':
-        waiting_for_pem = True
-        bot.send_message(call.message.chat.id, "⬆️ Please send the swarm.pem file now...")
-    elif call.data == 'set_autostart':
-        setup_autostart(call.message.chat.id)
-    elif call.data == 'kill_gensyn':
-        try:
-            subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
-            bot.send_message(call.message.chat.id, "🛑 gensyn screen killed (and all child processes).")
-        except subprocess.CalledProcessError as e:
-            bot.send_message(call.message.chat.id, f"❌ Failed to kill gensyn screen: {str(e)}")
-    elif call.data == 'toggle_tmate':
-        if not tmate_running:
+            bot.send_message(call.message.chat.id, "What do you want to update?", reply_markup=markup)
+            
+        elif call.data == "gensyn_update":
+            markup = InlineKeyboardMarkup()
+            markup.add(
+                InlineKeyboardButton("Soft Update", callback_data="gensyn_soft_update"),
+                InlineKeyboardButton("Hard Update", callback_data="gensyn_hard_update")
+            )
+            bot.send_message(call.message.chat.id, "Choose update type:", reply_markup=markup)
+            
+        elif call.data == "gensyn_soft_update":
+            threading.Thread(target=gensyn_soft_update, args=(call.message.chat.id,), daemon=True).start()
+            
+        elif call.data == "gensyn_hard_update":
+            threading.Thread(target=gensyn_hard_update, args=(call.message.chat.id,), daemon=True).start()
+            
+        elif call.data == "bot_update":
             try:
-                subprocess.run("tmate -S /tmp/tmate.sock new-session -d", shell=True, check=True)
-                subprocess.run("tmate -S /tmp/tmate.sock wait tmate-ready", shell=True, check=True)
-                result = subprocess.run(
-                    "tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}'",
-                    shell=True, check=True, capture_output=True, text=True
-                )
-                ssh_line = result.stdout.strip()
-                tmate_running = True
-                bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
-                bot.send_message(
-                    call.message.chat.id,
-                    f"<code>{ssh_line}</code>",
-                    parse_mode="HTML"
-                )
+                bot.send_message(call.message.chat.id, "Bot update started. Bot will be back in about 1 minute.")
+                update_script_path = "/tmp/bot_update_run.sh"
+                with open(update_script_path, "w") as f:
+                    f.write("curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash\n")
+                os.chmod(update_script_path, 0o700)
+                subprocess.run(f"echo 'bash {update_script_path} >/tmp/bot_update.log 2>&1' | at now + 1 minute", shell=True)
             except Exception as e:
-                tmate_running = False
-                bot.send_message(call.message.chat.id, f"❌ Failed to start tmate: {str(e)}")
-        else:
-            try:
-                subprocess.run("tmate -S /tmp/tmate.sock kill-server", shell=True, check=True)
-                tmate_running = False
-                bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=get_menu())
-                bot.send_message(call.message.chat.id, "🛑 Terminal session killed.")
-            except Exception as e:
-                bot.send_message(call.message.chat.id, f"❌ Failed to kill tmate: {str(e)}")
-    elif call.data == "update_menu":
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("Gensyn Update", callback_data="gensyn_update"),
-            InlineKeyboardButton("Bot Update", callback_data="bot_update")
-        )
-        bot.send_message(call.message.chat.id, "What do you want to update?", reply_markup=markup)
-    elif call.data == "gensyn_update":
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("Soft Update", callback_data="gensyn_soft_update"),
-            InlineKeyboardButton("Hard Update", callback_data="gensyn_hard_update")
-        )
-        bot.send_message(call.message.chat.id, "Choose update type:", reply_markup=markup)
-    elif call.data == "gensyn_soft_update":
-        threading.Thread(target=gensyn_soft_update, args=(call.message.chat.id,), daemon=True).start()
-    elif call.data == "gensyn_hard_update":
-        threading.Thread(target=gensyn_hard_update, args=(call.message.chat.id,), daemon=True).start()
-    elif call.data == "bot_update":
-        try:
-            # No SSH code, just notify user about update start
-            bot.send_message(call.message.chat.id, "Bot update started. Bot will be back in about 1 minute.")
-            update_script_path = "/tmp/bot_update_run.sh"
-            with open(update_script_path, "w") as f:
-                f.write("curl -s https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/update_bot.sh | bash\n")
-            os.chmod(update_script_path, 0o700)
-            subprocess.run(f"echo 'bash {update_script_path} >/tmp/bot_update.log 2>&1' | at now + 1 minute", shell=True)
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
-    elif call.data == "get_backup":
-        send_backup_files(call.message.chat.id)
+                bot.send_message(call.message.chat.id, f"❌ Failed to update bot: {str(e)}")
+                
+        elif call.data == "get_backup":
+            send_backup_files(call.message.chat.id)
+            
+    except Exception as e:
+        logging.error(f"Error in callback_query: {str(e)}")
+        bot.send_message(call.message.chat.id, "❌ An error occurred. Check logs.")
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -560,54 +601,43 @@ def monitor():
     previous_alive = None
     wandb_file_cache = set()
     wandb_folder_cache = set()
-    last_stale_sent_ts = None  # Track the last log timestamp we alerted for staleness
+    last_stale_sent_ts = None
+    
     while True:
         try:
             # 1. API status
-            try:
-                response = requests.get('http://localhost:3000', timeout=10)
-                alive = "Sign in to Gensyn" in response.text
-            except requests.RequestException:
-                alive = False
+            alive = check_gensyn_api()
+            
             # 2. IP change
             try:
                 ip = requests.get('https://api.ipify.org', timeout=10).text.strip()
             except:
                 ip = "Unknown"
+                
             if ip and ip != previous_ip:
                 bot.send_message(USER_ID, f"⚠️ IP changed: {ip}")
                 previous_ip = ip
+                
             if previous_alive is not None and alive != previous_alive:
                 status = '✅ Online' if alive else '❌ Offline'
                 bot.send_message(USER_ID, f"⚠️ localhost:3000 status changed: {status}")
             previous_alive = alive
-            # 3. Log freshness (single message per stale period, no new line messages)
-            latest_ts = None
-            if os.path.exists(GENSYN_LOG_PATH):
-                with open(GENSYN_LOG_PATH, "r") as f:
-                    lines = f.readlines()[-50:]
-                for line in reversed(lines):
-                    if "] - " in line:
-                        try:
-                            ts_str = line.split("]")[0][1:]
-                            ts = datetime.strptime(ts_str.split(",")[0], "%Y-%m-%d %H:%M:%S")
-                            latest_ts = ts
-                            break
-                        except Exception:
-                            continue
-                if latest_ts:
-                    # Only send alert if log is stale AND we have not already sent a message for this timestamp
-                    if (datetime.utcnow() - latest_ts > timedelta(minutes=90)):
-                        if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
-                            bot.send_message(
-                                USER_ID,
-                                f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!"
-                            )
-                            last_stale_sent_ts = latest_ts
-                    else:
-                        # If log is fresh again, reset so future staleness can alert
-                        last_stale_sent_ts = None
-            # 4. WANDB new file/folder detection and notification (single message + file)
+            
+            # 3. Log freshness
+            log_data = get_gensyn_log_status()
+            if log_data and log_data.get("timestamp"):
+                latest_ts = log_data["timestamp"]
+                if (datetime.utcnow() - latest_ts > timedelta(minutes=90)):
+                    if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
+                        bot.send_message(
+                            USER_ID,
+                            f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!"
+                        )
+                        last_stale_sent_ts = latest_ts
+                else:
+                    last_stale_sent_ts = None
+                    
+            # 4. WANDB monitoring
             new_folders = []
             new_files = []
             if os.path.exists(WANDB_LOG_DIR):
@@ -622,6 +652,7 @@ def monitor():
                         if path not in wandb_file_cache:
                             wandb_file_cache.add(path)
                             new_files.append(path)
+                            
                 if new_folders or new_files:
                     msg = "🪄 wandb detected:\n"
                     if new_folders:
@@ -629,14 +660,16 @@ def monitor():
                     if new_files:
                         msg += "New files:\n" + "\n".join(new_files)
                     bot.send_message(USER_ID, msg.strip())
-                    # Send only the first new file, if any
+                    
                     if new_files:
                         try:
                             with open(new_files[0], "rb") as f:
                                 bot.send_document(USER_ID, f)
                         except Exception:
                             pass
+                            
             time.sleep(60)
+            
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
             time.sleep(10)
@@ -647,4 +680,5 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
