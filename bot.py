@@ -390,18 +390,10 @@ def check_gensyn_api():
     Returns True if online, False otherwise
     """
     try:
-        response = requests.get("http://localhost:3000", timeout=5)
-        if response.status_code == 200:
+        response = requests.get("http://localhost:3000", timeout=3)
+        if "Sign in to Gensyn" in response.text:
             # If we get any HTML response, the service is running
-            response_text = response.text.lower()
             # Look for basic HTML indicators that show the service is responding
-            html_indicators = [
-                "html",
-                "<!doctype",
-                "<head>",
-                "<body>",
-                "__next_error__"
-            ]
             
             # If any HTML content is found, service is online
             for indicator in html_indicators:
