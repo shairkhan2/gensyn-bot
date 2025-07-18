@@ -392,18 +392,19 @@ def check_gensyn_api():
     try:
         response = requests.get("http://localhost:3000", timeout=5)
         if response.status_code == 200:
-            # Check for various indicators that the Gensyn service is running
+            # If we get any HTML response, the service is running
             response_text = response.text.lower()
-            gensyn_indicators = [
-                "sign in to gensyn",
-                "gensyn",
-                "__next_error__",
-                "<!doctype html>",
-                "<html"
+            # Look for basic HTML indicators that show the service is responding
+            html_indicators = [
+                "html",
+                "<!doctype",
+                "<head>",
+                "<body>",
+                "__next_error__"
             ]
             
-            # If any of these indicators are found, the service is running
-            for indicator in gensyn_indicators:
+            # If any HTML content is found, service is online
+            for indicator in html_indicators:
                 if indicator in response_text:
                     return True
         return False
@@ -713,7 +714,7 @@ def monitor():
     
     while True:
         try:
-            # 1. API status
+            # 1. API status - using the FIXED function
             alive = check_gensyn_api()
             
             # 2. IP change
@@ -786,5 +787,6 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
 
