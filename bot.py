@@ -386,23 +386,16 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
 
 def check_gensyn_api():
     """
-    Checks if the Gensyn API is online by making a request to localhost:3000
-    Returns True if online, False otherwise
+    Original working API check from old bot version
     """
     try:
         response = requests.get("http://localhost:3000", timeout=3)
-        if "Sign in to Gensyn" in response.text:
-            # If we get any HTML response, the service is running
-            # Look for basic HTML indicators that show the service is responding
-            
-            # If any HTML content is found, service is online
-            for indicator in html_indicators:
-                if indicator in response_text:
-                    return True
+        if response.status_code == 200:
+            return True  # Any 200 response means API is online
         return False
-    except Exception as e:
-        logging.error(f"Error checking Gensyn API: {str(e)}")
+    except Exception:
         return False
+
 
 def format_gensyn_status():
     """
