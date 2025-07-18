@@ -366,11 +366,11 @@ def format_gensyn_status():
     try:
         response = requests.get("http://localhost:3000", timeout=3)
         if "Sign in to Gensyn" in response.text:
-            api_status = "localhost:3000: ✅ Online"
+            api_status = "localhost:3000: ✅ running"
         else:
-            api_status = "localhost:3000: ❌ Offline"
+            api_status = "localhost:3000: ❌ stop"
     except Exception:
-        api_status = "localhost:3000: ❌ Offline"
+        api_status = "localhost:3000: ❌ stop"
     
     # Check log status
     log_data = get_gensyn_log_status()
