@@ -386,16 +386,13 @@ def get_gensyn_log_status(log_path=GENSYN_LOG_PATH):
 
 def check_gensyn_api():
     """
-    Original working API check from old bot version
+    Simple HTTP 200 check
     """
     try:
         response = requests.get("http://localhost:3000", timeout=3)
-        if response.status_code == 200:
-            return True  # Any 200 response means API is online
-        return False
+        return response.status_code == 200
     except Exception:
         return False
-
 
 def format_gensyn_status():
     """
