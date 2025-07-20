@@ -322,14 +322,35 @@ def check_gensyn_screen_running():
         logging.error(f"Error checking screen: {str(e)}")
         return False
 
-def start_gensyn_session(chat_id, use_sync_backup=True):
+def start_gensyn_session(chat_id, use_sync_backup=True, fresh_start=False):
     # Check if gensyn screen is already running
     if check_gensyn_screen_running():
         bot.send_message(chat_id, "⚠️ Gensyn already running!")
         return
     
-    # Check if swarm.pem exists
-    if not os.path.exists(SWARM_PEM_PATH):
+    # If fresh_start is True, skip swarm.pem check and just start the node
+    if fresh_start:
+        bot.send_message(chat_id, "🚀 Starting fresh node. swarm.pem will be generated automatically...")
+        backup_found = False
+        if use_sync_backup:
+            for file in ["userData.json", "userApiKey.json"]:
+                backup_path = os.path.join(SYNC_BACKUP_DIR, file)
+                target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
+                if os.path.exists(backup_path):
+                    shutil.copy(backup_path, target_path)
+                    backup_found = True
+        commands = [
+            "cd /root/rl-swarm",
+            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
+        ]
+        try:
+            subprocess.run("; ".join(commands), shell=True, check=True)
+            bot.send_message(chat_id, "✅ Fresh node started in screen session 'gensyn'. swarm.pem will be generated.")
+        except subprocess.CalledProcessError as e:
+            bot.send_message(chat_id, f"❌ Error starting fresh node: {str(e)}")
+        return
+    # Check if swarm.pem exists (for non-fresh start)
+    elif not os.path.exists(SWARM_PEM_PATH):
         markup = InlineKeyboardMarkup()
         markup.add(
             InlineKeyboardButton("Upload old swarm.pem", callback_data="upload_pem"),
@@ -724,7 +745,7 @@ def callback_query(call):
             start_gensyn_session(call.message.chat.id, use_sync_backup=False)
             
         elif call.data == 'start_fresh':
-            start_gensyn_session(call.message.chat.id, use_sync_backup=False)
+            start_gensyn_session(call.message.chat.id, use_sync_backup=False, fresh_start=True)
             
         elif call.data == 'upload_pem':
             waiting_for_pem = True
@@ -947,5 +968,6 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
 
