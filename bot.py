@@ -232,9 +232,21 @@ def gensyn_soft_update(chat_id):
             if os.path.exists(path):
                 shutil.copy(path, backup_dir)
         bot.send_message(chat_id, "Backup done. Killing Gensyn...")
-        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
-        bot.send_message(chat_id, "Gensyn killed. Updating (git pull)...")
-        result = subprocess.run("cd /root/rl-swarm && git pull", shell=True, capture_output=True, text=True)
+        # Only kill gensyn screen if present
+        if check_gensyn_screen_running():
+            subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+            bot.send_message(chat_id, "Gensyn killed.")
+        else:
+            bot.send_message(chat_id, "No gensyn screen found. Proceeding with update...")
+        bot.send_message(chat_id, "Updating (git switch/reset/clean/pull)...")
+        update_cmd = (
+            "cd /root/rl-swarm && "
+            "git switch main && "
+            "git reset --hard && "
+            "git clean -fd && "
+            "git pull origin main"
+        )
+        result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
         if result.returncode == 0:
             msg = "Update done. Restarting node..."
         else:
@@ -262,8 +274,13 @@ def gensyn_hard_update(chat_id):
             if os.path.exists(path):
                 shutil.copy(path, backup_dir)
         bot.send_message(chat_id, "Backup done. Killing Gensyn...")
-        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
-        bot.send_message(chat_id, "Gensyn killed. Cloning repo...")
+        # Only kill gensyn screen if present
+        if check_gensyn_screen_running():
+            subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+            bot.send_message(chat_id, "Gensyn killed.")
+        else:
+            bot.send_message(chat_id, "No gensyn screen found. Proceeding with update...")
+        bot.send_message(chat_id, "Cloning repo...")
         subprocess.run("rm -rf /root/rl-swarm", shell=True)
         result = subprocess.run("git clone https://github.com/shairkhan2/rl-swarm.git /root/rl-swarm", shell=True, capture_output=True, text=True)
         if result.returncode == 0:
@@ -930,4 +947,5 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
