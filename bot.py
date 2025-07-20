@@ -1,3 +1,57 @@
+monitor_active = False
+monitor_thread = None
+
+def reward_win_monitor(chat_id):
+    import time
+    import json
+    from urllib.parse import quote_plus
+    last_reward = None
+    last_win = None
+    peer_name = None
+    log_dir = "/root/rl-swarm/logs"
+    while True:
+        global monitor_active
+        if not monitor_active:
+            break
+        try:
+            # Discover peer name
+            import glob
+            log_files = glob.glob(f"{log_dir}/training_*.log")
+            if log_files:
+                log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                fname = os.path.basename(log_files[0])
+                if fname.startswith("training_") and fname.endswith(".log"):
+                    peer_name_raw = fname[len("training_"):-len(".log")]
+                    peer_name = peer_name_raw.replace("_", " ")
+            if not peer_name:
+                time.sleep(10)
+                continue
+            api_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(peer_name)}"
+            r = requests.get(api_url, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                reward = data.get("reward", 0)
+                score = data.get("score", 0)
+                # Alert if reward or win increased
+                reward_diff = None
+                win_diff = None
+                if last_reward is not None and reward > last_reward:
+                    reward_diff = reward - last_reward
+                if last_win is not None and score > last_win:
+                    win_diff = score - last_win
+                last_reward = reward
+                last_win = score
+                msg = []
+                if reward_diff:
+                    msg.append(f"🎁 reward {reward}+{reward_diff}")
+                if win_diff:
+                    msg.append(f"🏆 win {score}+{win_diff}")
+                if msg:
+                    bot.send_message(chat_id, " ".join(msg))
+            time.sleep(600)  # 10 min
+        except Exception as e:
+            logging.error(f"Monitor error: {str(e)}")
+            time.sleep(30)
 import os
 import time
 import threading
@@ -70,6 +124,10 @@ def get_menu():
     )
     markup.row(
         InlineKeyboardButton("🔄 Update", callback_data="update_menu")
+    )
+    markup.row(
+        InlineKeyboardButton("▶️ Start Monitor", callback_data="start_monitor"),
+        InlineKeyboardButton("⏹️ Stop Monitor", callback_data="stop_monitor")
     )
     return markup
 
@@ -360,39 +418,130 @@ def check_gensyn_api():
 
 def format_gensyn_status():
     """
-    Formats the complete Gensyn status message
+    Formats the complete Gensyn status message, including peer info and EQA address
     """
+    import glob
+    import json
+    from urllib.parse import quote_plus
+    from web3 import Web3
+    from datetime import date
+
+    EOA_CACHE_FILE = "/root/gensyn-bot/eoa_cache.json"
+    ALCHEMY_RPC = "https://gensyn-testnet.g.alchemy.com/v2/TD5tr7mo4VfXlSaolFlSr3tL70br2M9J"
+    CONTRACT_ADDRESS = "0xFaD7C5e93f28257429569B854151A1B8DCD404c2"
+    ABI = [
+        {
+            "name": "getEoa",
+            "type": "function",
+            "stateMutability": "view",
+            "inputs": [{"name": "peerIds", "type": "string[]"}],
+            "outputs": [{"name": "", "type": "address[]"}]
+        }
+    ]
+
+    def fetch_eoa_mapping(w3, contract, peer_ids):
+        today = str(date.today())
+        if os.path.exists(EOA_CACHE_FILE):
+            try:
+                with open(EOA_CACHE_FILE) as f:
+                    data = json.load(f)
+                    if data.get("date") == today:
+                        return data.get("mapping", {})
+            except Exception:
+                pass
+        try:
+            addresses = contract.functions.getEoa(peer_ids).call()
+            mapping = {pid: eoa for pid, eoa in zip(peer_ids, addresses)}
+            with open(EOA_CACHE_FILE, "w") as f:
+                json.dump({"date": today, "mapping": mapping}, f, indent=4)
+            return mapping
+        except Exception as e:
+            return {pid: f"Error: {str(e)}" for pid in peer_ids}
+
     # Check API status by making a request to localhost:3000
     try:
         response = requests.get("http://localhost:3000", timeout=3)
         if "Sign in to Gensyn" in response.text:
-            api_status = "localhost:3000: ✅ running"
+            api_status = "localhost:3000: ✅ Running"
         else:
-            api_status = "localhost:3000: ❌ stop"
+            api_status = "localhost:3000: ❌ Stopped"
     except Exception:
-        api_status = "localhost:3000: ❌ stop"
-    
+        api_status = "localhost:3000: ❌ Stopped"
+
     # Check log status
     log_data = get_gensyn_log_status()
     log_status_lines = []
-
     if log_data and any(log_data.values()):
         if log_data.get("timestamp"):
             ts = log_data["timestamp"]
             delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
             log_status_lines.append(f"🕰️ Last Activity: {delta_min} mins ago")
-
         if log_data.get("joining"):
             joining_text = log_data["joining"]
-            log_status_lines.append(f"🤝 Joining: {joining_text}")
-
+            # Extract round number
+            import re
+            m = re.search(r"(\d+)", joining_text)
+            round_num = m.group(1) if m else joining_text
+            log_status_lines.append(f"🤝 Joining: 🐝 Round {round_num}")
         if log_data.get("starting"):
             starting_text = log_data["starting"]
-            log_status_lines.append(f"▶️ Starting: {starting_text}")
-
+            m = re.search(r"(\d+/\d+)", starting_text)
+            round_str = m.group(1) if m else starting_text
+            log_status_lines.append(f"▶️ Starting: Round {round_str}")
     log_status = "\n".join(log_status_lines) if log_status_lines else "Round: No data found"
 
-    return f"{api_status}\n\n{log_status}"
+    # Peer Name Discovery
+    peer_name = None
+    log_dir = "/root/rl-swarm/logs"
+    try:
+        log_files = glob.glob(f"{log_dir}/training_*.log")
+        if log_files:
+            log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            fname = os.path.basename(log_files[0])
+            if fname.startswith("training_") and fname.endswith(".log"):
+                peer_name_raw = fname[len("training_"):-len(".log")]
+                peer_name = peer_name_raw.replace("_", " ")
+    except Exception:
+        peer_name = None
+
+    peer_info_lines = []
+    if peer_name:
+        api_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(peer_name)}"
+        try:
+            r = requests.get(api_url, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                peerId = data.get("peerId", "?")
+                reward = data.get("reward", "?")
+                score = data.get("score", "?")
+                online = data.get("online", False)
+                online_status = "✅ Online" if online else "❌ Offline"
+
+                # Get EQA address from smart contract (batch)
+                w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
+                contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
+                eoa_mapping = fetch_eoa_mapping(w3, contract, [peerId])
+                eqa = eoa_mapping.get(peerId, "?")
+
+                now = datetime.utcnow()
+                reward_time = f"[{int((now-datetime.utcfromtimestamp(data.get('rewardTimestamp', time.time()))).total_seconds()/60)}m ago]" if data.get('rewardTimestamp') else ""
+                score_time = f"[{int((now-datetime.utcfromtimestamp(data.get('scoreTimestamp', time.time()))).total_seconds()/60)}m ago]" if data.get('scoreTimestamp') else ""
+
+                # Send pet name, peerId, EQA in plain copy-paste format
+                peer_info_lines.append("")
+                peer_info_lines.append(f"Pet Name: {peer_name}")
+                peer_info_lines.append(f"Peer ID: {peerId}")
+                peer_info_lines.append(f"EQA: {eqa}")
+                peer_info_lines.append(f"Reward: {reward} {reward_time}")
+                peer_info_lines.append(f"Win: {score}{score_time}")
+            else:
+                peer_info_lines.append(f"Peer info fetch failed: {r.status_code}")
+        except Exception as e:
+            peer_info_lines.append(f"Peer info error: {str(e)}")
+    else:
+        peer_info_lines.append("No peer name found.")
+
+    return f"{api_status}\n\n{log_status}\n" + "\n".join(peer_info_lines)
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
@@ -435,7 +584,21 @@ def gensyn_status_handler(message):
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    global waiting_for_pem, login_in_progress, tmate_running, last_action_time
+    global waiting_for_pem
+    global login_in_progress
+    global tmate_running
+    global last_action_time
+    global monitor_active
+    global monitor_thread
+    # Ensure globals are initialized
+    try:
+        monitor_active
+    except NameError:
+        monitor_active = False
+    try:
+        monitor_thread
+    except NameError:
+        monitor_thread = None
     user_id = call.from_user.id
     now = time.time()
     
@@ -494,10 +657,33 @@ def callback_query(call):
         elif call.data == 'gensyn_status':
             try:
                 status_message = format_gensyn_status()
-                bot.send_message(call.message.chat.id, status_message, parse_mode="Markdown")
+                markup = get_menu()
+                bot.send_message(call.message.chat.id, status_message, parse_mode="Markdown", reply_markup=markup)
             except Exception as e:
                 logging.error(f"Error in gensyn_status callback: {str(e)}")
                 bot.send_message(call.message.chat.id, "❌ Error getting status. Check logs.")
+
+        elif call.data == 'start_monitor':
+            try:
+                if not monitor_active:
+                    monitor_active = True
+                    if monitor_thread is None or not monitor_thread.is_alive():
+                        monitor_thread = threading.Thread(target=reward_win_monitor, args=(call.message.chat.id,), daemon=True)
+                        monitor_thread.start()
+                    bot.send_message(call.message.chat.id, "🎯 Monitor started.")
+                else:
+                    bot.send_message(call.message.chat.id, "Monitor already running.")
+            except Exception as e:
+                logging.error(f"Monitor start error: {str(e)}")
+                bot.send_message(call.message.chat.id, f"❌ Failed to start monitor: {str(e)}")
+
+        elif call.data == 'stop_monitor':
+            try:
+                monitor_active = False
+                bot.send_message(call.message.chat.id, "⏹️ Monitor stopped.")
+            except Exception as e:
+                logging.error(f"Monitor stop error: {str(e)}")
+                bot.send_message(call.message.chat.id, f"❌ Failed to stop monitor: {str(e)}")
                 
         elif call.data == 'start_gensyn':
             backup_exists = (
