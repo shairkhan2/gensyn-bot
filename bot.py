@@ -887,30 +887,32 @@ def monitor():
     previous_localhost_alive = None
 
     def check_internet_connectivity():
-        # List of famous sites to ping
+        # Sleep 5 minutes before each ping check to avoid frequent pings
+        time.sleep(300)  # 5 minutes
+        # List of famous sites to ping (prefer IPs to avoid DNS issues)
         sites = [
             "8.8.8.8",  # Google DNS
             "1.1.1.1",  # Cloudflare DNS
-            "github.com",
-            "google.com",
-            "yahoo.com",
-            "bing.com",
-            "amazon.com",
-            "facebook.com",
-            "twitter.com",
-            "microsoft.com"
+            "208.67.222.222",  # OpenDNS
+            "9.9.9.9",  # Quad9
+            "142.250.72.14",  # google.com (one of the IPs)
+            "140.82.113.3",  # github.com (one of the IPs)
+            "52.94.225.248",  # amazon.com (one of the IPs)
+            "157.240.1.35",  # facebook.com (one of the IPs)
+            "104.244.42.1",  # twitter.com (one of the IPs)
+            "40.113.200.201"  # microsoft.com (one of the IPs)
         ]
         failed = 0
+        import platform
+        param = "-n" if platform.system().lower() == "windows" else "-c"
         for site in sites:
             try:
-                # Use -n 1 for Windows, -c 1 for Linux
-                import platform
-                param = "-n" if platform.system().lower() == "windows" else "-c"
-                # For IPs, ping directly; for domains, resolve first
-                target = site
-                response = subprocess.run(["ping", param, "1", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Add a timeout to the ping command (2s per ping)
+                response = subprocess.run(["ping", param, "1", site], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
                 if response.returncode != 0:
                     failed += 1
+            except subprocess.TimeoutExpired:
+                failed += 1
             except Exception:
                 failed += 1
         return failed == len(sites)
