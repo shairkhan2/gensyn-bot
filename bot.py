@@ -886,10 +886,58 @@ def monitor():
     last_stale_sent_ts = None
     previous_localhost_alive = None
 
+    def check_internet_connectivity():
+        # List of famous sites to ping
+        sites = [
+            "8.8.8.8",  # Google DNS
+            "1.1.1.1",  # Cloudflare DNS
+            "github.com",
+            "google.com",
+            "yahoo.com",
+            "bing.com",
+            "amazon.com",
+            "facebook.com",
+            "twitter.com",
+            "microsoft.com"
+        ]
+        failed = 0
+        for site in sites:
+            try:
+                # Use -n 1 for Windows, -c 1 for Linux
+                import platform
+                param = "-n" if platform.system().lower() == "windows" else "-c"
+                # For IPs, ping directly; for domains, resolve first
+                target = site
+                response = subprocess.run(["ping", param, "1", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if response.returncode != 0:
+                    failed += 1
+            except Exception:
+                failed += 1
+        return failed == len(sites)
+
     while True:
         try:
             # 1. API status (using check_gensyn_api)
             alive = check_gensyn_api()
+            # Fallback: Check internet connectivity
+            if check_internet_connectivity():
+                # No internet detected, take fallback actions
+                try:
+                    bot.send_message(USER_ID, "❗ No internet detected (all pings failed). Taking fallback actions: killing Gensyn, turning off VPN...")
+                    # Kill gensyn screen if running
+                    if check_gensyn_screen_running():
+                        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+                    # Turn off WireGuard
+                    stop_vpn()
+                    # Wait a few minutes before notifying user
+                    time.sleep(180)  # 3 minutes
+                    bot.send_message(USER_ID, "Fallback complete: Gensyn killed, VPN turned off due to no internet connectivity.")
+                except Exception as e:
+                    logging.error(f"Fallback error: {str(e)}")
+                    bot.send_message(USER_ID, f"❌ Fallback error: {str(e)}")
+                # After fallback, wait longer before next check
+                time.sleep(300)
+                continue
 
             # 1a. Localhost:3000 status (direct monitoring)
             try:
@@ -922,11 +970,11 @@ def monitor():
             log_data = get_gensyn_log_status()
             if log_data and log_data.get("timestamp"):
                 latest_ts = log_data["timestamp"]
-                if (datetime.utcnow() - latest_ts > timedelta(minutes=90)):
+                if (datetime.utcnow() - latest_ts > timedelta(minutes=240)):
                     if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
                         bot.send_message(
                             USER_ID,
-                            f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>1.5h ago)!"
+                            f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>4h ago)!"
                         )
                         last_stale_sent_ts = latest_ts
                 else:
@@ -968,6 +1016,7 @@ try:
     bot.infinity_polling()
 except Exception as e:
     logging.error("Bot crashed: %s", str(e))
+
 
 
 
