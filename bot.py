@@ -886,65 +886,11 @@ def monitor():
     last_stale_sent_ts = None
     previous_localhost_alive = None
 
-    def check_internet_connectivity():
-        # Sleep 5 minutes before each check
-        time.sleep(300)
-        # 1. Ping test
-        sites = [
-            "8.8.8.8", "1.1.1.1", "208.67.222.222", "9.9.9.9",
-            "142.250.72.14", "140.82.113.3", "52.94.225.248",
-            "157.240.1.35", "104.244.42.1", "40.113.200.201"
-        ]
-        failed_ping = 0
-        import platform
-        param = "-n" if platform.system().lower() == "windows" else "-c"
-        for site in sites:
-            try:
-                response = subprocess.run(["ping", param, "1", site], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
-                if response.returncode != 0:
-                    failed_ping += 1
-            except subprocess.TimeoutExpired:
-                failed_ping += 1
-            except Exception:
-                failed_ping += 1
-        # 2. HTTP test (try to fetch a real web page)
-        http_sites = [
-            "https://www.google.com", "https://github.com", "https://microsoft.com"
-        ]
-        failed_http = 0
-        for url in http_sites:
-            try:
-                r = requests.get(url, timeout=5)
-                if r.status_code != 200:
-                    failed_http += 1
-            except Exception:
-                failed_http += 1
-        # Only return True (no internet) if both ping and HTTP fail
-        return failed_ping == len(sites) and failed_http == len(http_sites)
 
     while True:
         try:
             # 1. API status (using check_gensyn_api)
             alive = check_gensyn_api()
-            # Fallback: Check internet connectivity
-            if check_internet_connectivity():
-                # No internet detected, take fallback actions
-                try:
-                    bot.send_message(USER_ID, "❗ No internet detected (all pings failed). Taking fallback actions: killing Gensyn, turning off VPN...")
-                    # Kill gensyn screen if running
-                    if check_gensyn_screen_running():
-                        subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
-                    # Turn off WireGuard
-                    stop_vpn()
-                    # Wait a few minutes before notifying user
-                    time.sleep(180)  # 3 minutes
-                    bot.send_message(USER_ID, "Fallback complete: Gensyn killed, VPN turned off due to no internet connectivity.")
-                except Exception as e:
-                    logging.error(f"Fallback error: {str(e)}")
-                    bot.send_message(USER_ID, f"❌ Fallback error: {str(e)}")
-                # After fallback, wait longer before next check
-                time.sleep(300)
-                continue
 
             # 1a. Localhost:3000 status (direct monitoring)
             try:
