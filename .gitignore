@@ -1,9 +1,0 @@
-.venv/
-venv/
-*/venv/
-__pycache__/
-*.pyc
-manager/venv/
-agent/venv/
-sync-backup/
-backup-userdata/
