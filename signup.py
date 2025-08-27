@@ -16,7 +16,6 @@ async def wait_for_file(path, timeout=300):
         if os.path.exists(path) and os.path.getsize(path) > 0:
             with open(path) as f:
                 content = f.read().strip()
-            # Clear file after reading to prevent re-use
             open(path, 'w').close()
             return content
         await asyncio.sleep(1)
@@ -49,7 +48,6 @@ async def main():
         if os.path.exists(path):
             open(path, 'w').close()
 
-    # Don't send waiting message - bot already notified user
     if not await wait_for_port("localhost", 3000, 180):
         await send_async_message("❌ Timeout waiting for localhost:3000 - Check if Gensyn is running")
         return
@@ -61,35 +59,36 @@ async def main():
 
         try:
             await page.goto("http://localhost:3000", timeout=120000)
-            
-            # Click Login button
-            login_button = await page.wait_for_selector("button:has-text('Login')", timeout=30000)
-            await login_button.click()
-            
-            # Wait for email input
-            email = await wait_for_file("/root/email.txt", 300)
-            email_input = await page.wait_for_selector("input[type=email]", timeout=30000)
-            await email_input.fill(email)
-            
-            # Click Continue button
-            continue_button = await page.wait_for_selector("button:has-text('Continue')", timeout=30000)
-            await continue_button.click()
-            
-            # Wait for OTP input
-            await page.wait_for_selector("text=Enter verification code", timeout=90000)
-            
-            # Get OTP from file
-            otp = await wait_for_file("/root/otp.txt", 300)
-            
-            # Find OTP input field
-            otp_input = await page.wait_for_selector("input[inputmode=numeric]", timeout=60000)
-            await otp_input.type(otp, delay=50)
-            await page.keyboard.press("Enter")
 
-            # Wait for either success or failure
+            # Step 1: Click Sign In (new selector)
+            sign_in_button = await page.wait_for_selector("button.btn.bg-gensyn-pink", timeout=30000)
+            await sign_in_button.click()
+
+            # Step 2: Modal appears, enter email
+            email = await wait_for_file("/root/email.txt", 300)
+            email_input = await page.wait_for_selector("form input[type='email']", timeout=30000)
+            await email_input.fill(email)
+            continue_button = await page.wait_for_selector("form button[type='submit']", timeout=30000)
+            await continue_button.click()
+
+            # Step 3: OTP Modal: wait for code entry
+            await page.wait_for_selector("h3:text('Enter verification code')", timeout=90000)
+            otp = await wait_for_file("/root/otp.txt", 300)
+            otp_digits = list(otp.strip())
+
+            # Find the 6 input fields in modal (robust selector)
+            otp_inputs = await page.query_selector_all(".akui-modal input[inputmode='numeric']")
+            if len(otp_inputs) < 6:
+                raise Exception("Didn't find 6 OTP input boxes in modal")
+
+            for i, digit in enumerate(otp_digits):
+                await otp_inputs[i].fill(digit)
+            await otp_inputs[-1].press("Enter")
+
+            # Step 4: Success check
             try:
                 await asyncio.wait_for(
-                    page.wait_for_selector("text=/successfully logged in|dashboard/i", timeout=120000),
+                    page.wait_for_selector("text='You are successfully logged in to the Gensyn Testnet.'", timeout=120000),
                     timeout=120
                 )
                 await page.screenshot(path="/root/final_login_success.png", full_page=True)
@@ -111,6 +110,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-if __name__ == "__main__":
-    asyncio.run(main())
-
