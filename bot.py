@@ -14,15 +14,13 @@ def reward_win_monitor(chat_id):
         if not monitor_active:
             break
         try:
-            # Discover peer name
-            import glob
-            log_files = glob.glob(f"{log_dir}/training_*.log")
-            if log_files:
-                log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-                fname = os.path.basename(log_files[0])
-                if fname.startswith("training_") and fname.endswith(".log"):
-                    peer_name_raw = fname[len("training_"):-len(".log")]
-                    peer_name = peer_name_raw.replace("_", " ")
+            # Discover peer name from cached JSON (generated from swarm_launcher.log)
+            try:
+                info = get_cached_peer_info()
+                if info:
+                    peer_name = info.get("peer_name") or peer_name
+            except Exception:
+                peer_name = peer_name
             if not peer_name:
                 time.sleep(10)
                 continue
@@ -59,6 +57,9 @@ import subprocess
 import logging
 import requests
 import shutil
+import json
+import re
+import html
 from datetime import datetime, timedelta
 from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -72,6 +73,74 @@ BACKUP_USERDATA_DIR = "/root/gensyn-bot/backup-userdata"
 SYNC_BACKUP_DIR = "/root/gensyn-bot/sync-backup"
 GENSYN_LOG_PATH = "/root/rl-swarm/logs/swarm_launcher.log"
 WANDB_LOG_DIR = "/root/rl-swarm/logs/wandb"
+
+# Cache file for discovered peer info
+PEER_CACHE_FILE = "/root/gensyn-bot/peer_info.json"
+
+def parse_peer_info_from_swarm_log(log_path=GENSYN_LOG_PATH):
+    """
+    Parse peer name and peer id from swarm_launcher.log lines, e.g.:
+    [ts][...][INFO] - Hello ... [<peer name>] ... [<peer id>]
+    Returns dict {"peer_name": str, "peer_id": str} or None
+    """
+    try:
+        if not os.path.exists(log_path):
+            return None
+        # Read last 1000 lines to search for the most recent Hello line
+        with open(log_path, "r") as f:
+            lines = f.readlines()[-1000:]
+        for line in reversed(lines):
+            if "Hello" not in line:
+                continue
+            try:
+                after = line.split("Hello", 1)[1]
+            except Exception:
+                continue
+            # Capture the first two bracketed groups after "Hello"
+            brackets = []
+            for m in re.finditer(r"\[([^\]]+)\]", after):
+                brackets.append(m.group(1))
+                if len(brackets) == 2:
+                    break
+            if len(brackets) >= 2:
+                peer_name = brackets[0].strip()
+                peer_id = brackets[1].strip()
+                if peer_name and peer_id:
+                    return {"peer_name": peer_name, "peer_id": peer_id}
+        return None
+    except Exception:
+        return None
+
+def write_cached_peer_info(info, cache_path=PEER_CACHE_FILE):
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        payload = {
+            **info,
+            "updated_at": datetime.utcnow().isoformat() + "Z"
+        }
+        with open(cache_path, "w") as f:
+            json.dump(payload, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+def get_cached_peer_info(cache_path=PEER_CACHE_FILE):
+    """
+    Return cached peer info if present; otherwise parse the log and cache it.
+    """
+    try:
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                data = json.load(f)
+                if isinstance(data, dict) and (data.get("peer_name") or data.get("peer_id")):
+                    return data
+        info = parse_peer_info_from_swarm_log()
+        if info:
+            write_cached_peer_info(info, cache_path)
+            return {**info}
+        return None
+    except Exception:
+        return None
 
 logging.basicConfig(
     filename='/root/bot_error.log',
@@ -114,6 +183,9 @@ def get_menu():
     )
     markup.row(
         InlineKeyboardButton("🛑 Kill Gensyn", callback_data="kill_gensyn")
+    )
+    markup.row(
+        InlineKeyboardButton("🍳 Install Gensyn", callback_data="install_gensyn")
     )
     terminal_label = "🖥️ Terminal: ON" if tmate_running else "🖥️ Terminal: OFF"
     markup.row(
@@ -184,6 +256,87 @@ def backup_user_data():
     except Exception as e:
         logging.error(f"Backup error: {str(e)}")
         return False
+
+def run_command(cmd, chat_id=None, desc=None):
+    try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            if chat_id:
+                bot.send_message(chat_id, f"❌ {desc or 'Command failed'}: {html.escape(result.stderr[-1000:])}", parse_mode="HTML")
+            return False, result.stdout + "\n" + result.stderr
+        return True, result.stdout
+    except Exception as e:
+        if chat_id:
+            bot.send_message(chat_id, f"❌ {desc or 'Command error'}: {str(e)}")
+        return False, str(e)
+
+def install_gensyn(chat_id):
+    try:
+        last_msg_id = None
+        def send_step(text):
+            nonlocal last_msg_id
+            try:
+                if last_msg_id:
+                    try:
+                        bot.delete_message(chat_id, last_msg_id)
+                    except Exception:
+                        pass
+                msg = bot.send_message(chat_id, text)
+                last_msg_id = msg.message_id
+            except Exception:
+                last_msg_id = None
+
+        send_step("🍳 Installing Gensyn prerequisites... This may take a while.")
+        steps = [
+            ("sudo apt update", "APT update"),
+            ("sudo apt install -y python3 python3-venv python3-pip curl wget screen git lsof gnupg", "Base packages"),
+            ("curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -", "NodeSource setup"),
+            ("sudo apt update", "APT update (node)"),
+            ("sudo apt install -y nodejs", "Install Node.js"),
+            ("sudo apt install -y tmate", "Install tmate"),
+            ("curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | gpg --dearmor | sudo tee /usr/share/keyrings/yarn-archive-keyring.gpg > /dev/null", "Yarn key"),
+            ("echo \"deb [signed-by=/usr/share/keyrings/yarn-archive-keyring.gpg] https://dl.yarnpkg.com/debian stable main\" | sudo tee /etc/apt/sources.list.d/yarn.list > /dev/null", "Yarn repo"),
+            ("sudo apt update", "APT update (yarn)"),
+            ("sudo apt install -y yarn", "Install yarn"),
+        ]
+        for cmd, desc in steps:
+            send_step(f"⏳ {desc}...")
+            ok, out = run_command(cmd, None, desc)
+            if not ok:
+                send_step(f"❌ {desc} failed: {html.escape(out[-1000:])}")
+                return
+
+        # Clone rl-swarm only if missing
+        if os.path.exists("/root/rl-swarm"):
+            send_step("ℹ️ /root/rl-swarm already exists. Skipping clone.")
+        else:
+            send_step("⏳ Cloning rl-swarm...")
+            ok, out = run_command("cd /root && git clone https://github.com/shairkhan2/rl-swarm.git rl-swarm", None, "Clone rl-swarm")
+            if not ok:
+                send_step(f"❌ Clone rl-swarm failed: {html.escape(out[-1000:])}")
+                return
+
+        # Cloudflared
+        send_step("⏳ Installing cloudflared...")
+        ok, out = run_command("wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb", None, "Download cloudflared")
+        if not ok:
+            send_step(f"❌ Download cloudflared failed: {html.escape(out[-1000:])}")
+            return
+        ok, out = run_command("sudo dpkg -i cloudflared-linux-amd64.deb || sudo apt -f install -y", None, "Install cloudflared")
+        if not ok:
+            send_step(f"❌ Install cloudflared failed: {html.escape(out[-1000:])}")
+            return
+        try:
+            os.remove("cloudflared-linux-amd64.deb")
+        except Exception:
+            pass
+
+        send_step("✅ Install complete.")
+    except Exception as e:
+        try:
+            send_step(f"❌ Install failed: {html.escape(str(e))}")
+        except Exception:
+            bot.send_message(chat_id, f"❌ Install failed: {str(e)}")
 
 def setup_autostart(chat_id):
     try:
@@ -506,41 +659,40 @@ def format_gensyn_status():
     except Exception:
         api_status = "localhost:3000: ❌ Stopped"
 
-    # Check log status
+    # Check log status and collect structured fields
     log_data = get_gensyn_log_status()
     log_status_lines = []
+    last_activity_min = None
+    joining_round_num = None
+    starting_round_str = None
     if log_data and any(log_data.values()):
         if log_data.get("timestamp"):
             ts = log_data["timestamp"]
-            delta_min = int((datetime.utcnow() - ts).total_seconds() / 60)
-            log_status_lines.append(f"🕰️ Last Activity: {delta_min} mins ago")
+            last_activity_min = int((datetime.utcnow() - ts).total_seconds() / 60)
+            log_status_lines.append(f"🕰️ Last Activity: {last_activity_min} mins ago")
         if log_data.get("joining"):
             joining_text = log_data["joining"]
-            # Extract round number
-            import re
             m = re.search(r"(\d+)", joining_text)
-            round_num = m.group(1) if m else joining_text
-            log_status_lines.append(f"🤝 Joining: 🐝 Round {round_num}")
+            joining_round_num = m.group(1) if m else joining_text
+            log_status_lines.append(f"🤝 Joining: 🐝 Round {joining_round_num}")
         if log_data.get("starting"):
             starting_text = log_data["starting"]
             m = re.search(r"(\d+/\d+)", starting_text)
-            round_str = m.group(1) if m else starting_text
-            log_status_lines.append(f"▶️ Starting: Round {round_str}")
+            starting_round_str = m.group(1) if m else starting_text
+            log_status_lines.append(f"▶️ Starting: Round {starting_round_str}")
     log_status = "\n".join(log_status_lines) if log_status_lines else "Round: No data found"
 
-    # Peer Name Discovery
+    # Peer Discovery via cached JSON (from swarm_launcher.log)
     peer_name = None
-    log_dir = "/root/rl-swarm/logs"
+    peer_id = None
     try:
-        log_files = glob.glob(f"{log_dir}/training_*.log")
-        if log_files:
-            log_files.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-            fname = os.path.basename(log_files[0])
-            if fname.startswith("training_") and fname.endswith(".log"):
-                peer_name_raw = fname[len("training_"):-len(".log")]
-                peer_name = peer_name_raw.replace("_", " ")
+        info = get_cached_peer_info()
+        if info:
+            peer_name = info.get("peer_name") or None
+            peer_id = info.get("peer_id") or None
     except Exception:
         peer_name = None
+        peer_id = None
 
     peer_info_lines = []
     if peer_name:
@@ -549,29 +701,34 @@ def format_gensyn_status():
             r = requests.get(api_url, timeout=10)
             if r.status_code == 200:
                 data = r.json()
-                peerId = data.get("peerId", "?")
+                peerId = data.get("peerId") or peer_id or "?"
                 reward = data.get("reward", "?")
                 score = data.get("score", "?")
                 online = data.get("online", False)
-                online_status = "✅ Online" if online else "❌ Offline"
-
                 # Get EQA address from smart contract (batch)
                 w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
                 contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
-                eoa_mapping = fetch_eoa_mapping(w3, contract, [peerId])
-                eqa = eoa_mapping.get(peerId, "?")
+                eqa = "?"
+                if peerId and peerId != "?":
+                    eoa_mapping = fetch_eoa_mapping(w3, contract, [peerId])
+                    eqa = eoa_mapping.get(peerId, "?")
 
-                now = datetime.utcnow()
-                reward_time = f"[{int((now-datetime.utcfromtimestamp(data.get('rewardTimestamp', time.time()))).total_seconds()/60)}m ago]" if data.get('rewardTimestamp') else ""
-                score_time = f"[{int((now-datetime.utcfromtimestamp(data.get('scoreTimestamp', time.time()))).total_seconds()/60)}m ago]" if data.get('scoreTimestamp') else ""
-
-                # Send pet name, peerId, EQA in plain copy-paste format
-                peer_info_lines.append("")
-                peer_info_lines.append(f"Pet Name: {peer_name}")
-                peer_info_lines.append(f"Peer ID: {peerId}")
-                peer_info_lines.append(f"EQA: {eqa}")
-                peer_info_lines.append(f"Reward: {reward} {reward_time}")
-                peer_info_lines.append(f"Win: {score}{score_time}")
+                # Pretty emoji-format status block
+                status_label = "✅ Running" if "✅" in api_status else "❌ Stopped"
+                last_txt = f"{last_activity_min}m" if last_activity_min is not None else "—"
+                join_txt = joining_round_num or "—"
+                start_txt = starting_round_str or "—"
+                pretty_lines = [
+                    f"🌐 Status → {status_label} ({last_txt})",
+                    f"🐝 Round → {join_txt} | {start_txt}",
+                    f"🎁 Reward → {reward}    🏆 Win → {score}",
+                    f"🧩 Peer → {peer_name}",
+                    f"🆔 ID → {peerId}",
+                    f"🏦 EQA → {eqa}",
+                ]
+                text = "\n".join(pretty_lines)
+                # Wrap in HTML <pre> for tap-to-copy in Telegram
+                return f"<pre>{html.escape(text)}</pre>"
             else:
                 peer_info_lines.append(f"Peer info fetch failed: {r.status_code}")
         except Exception as e:
@@ -615,7 +772,7 @@ def gensyn_status_handler(message):
         return
     try:
         status_message = format_gensyn_status()
-        bot.send_message(message.chat.id, status_message, parse_mode="Markdown")
+        bot.send_message(message.chat.id, status_message, parse_mode="HTML")
     except Exception as e:
         logging.error(f"Error in gensyn_status_handler: {str(e)}")
         bot.send_message(message.chat.id, "❌ Error getting status. Check logs.")
@@ -696,7 +853,7 @@ def callback_query(call):
             try:
                 status_message = format_gensyn_status()
                 markup = get_menu()
-                bot.send_message(call.message.chat.id, status_message, parse_mode="Markdown", reply_markup=markup)
+                bot.send_message(call.message.chat.id, status_message, parse_mode="HTML", reply_markup=markup)
             except Exception as e:
                 logging.error(f"Error in gensyn_status callback: {str(e)}")
                 bot.send_message(call.message.chat.id, "❌ Error getting status. Check logs.")
@@ -760,6 +917,12 @@ def callback_query(call):
                 bot.send_message(call.message.chat.id, "🛑 gensyn screen killed (and all child processes).")
             except subprocess.CalledProcessError as e:
                 bot.send_message(call.message.chat.id, f"❌ Failed to kill gensyn screen: {str(e)}")
+        
+        elif call.data == 'install_gensyn':
+            try:
+                threading.Thread(target=install_gensyn, args=(call.message.chat.id,), daemon=True).start()
+            except Exception as e:
+                bot.send_message(call.message.chat.id, f"❌ Failed to start install: {str(e)}")
                 
         elif call.data == 'toggle_tmate':
             if not tmate_running:
