@@ -8,44 +8,65 @@ def reward_win_monitor(chat_id):
     last_reward = None
     last_win = None
     peer_name = None
+    peer_id = None
     log_dir = "/root/rl-swarm/logs"
     while True:
         global monitor_active
         if not monitor_active:
             break
         try:
-            # Discover peer name from cached JSON (generated from swarm_launcher.log)
+            # Discover peer info from cached JSON (generated from swarm_launcher.log)
             try:
                 info = get_cached_peer_info()
                 if info:
                     peer_name = info.get("peer_name") or peer_name
+                    peer_id = info.get("peer_id") or peer_id
             except Exception:
-                peer_name = peer_name
-            if not peer_name:
+                pass
+
+            # Resolve peer_id from name if not available
+            if not peer_id and peer_name:
+                try:
+                    name_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(peer_name)}"
+                    r_name = requests.get(name_url, timeout=10)
+                    if r_name.status_code == 200:
+                        record = r_name.json()
+                        raw_peer_id = record.get("peerId") or ""
+                        peer_id = raw_peer_id.split("|")[-1] if "|" in raw_peer_id else raw_peer_id or None
+                except Exception:
+                    pass
+
+            # If still no peer_id, wait and retry
+            if not peer_id:
                 time.sleep(10)
                 continue
-            api_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(peer_name)}"
-            r = requests.get(api_url, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                reward = data.get("reward", 0)
-                score = data.get("score", 0)
-                # Alert if reward or win increased
-                reward_diff = None
-                win_diff = None
-                if last_reward is not None and reward > last_reward:
-                    reward_diff = reward - last_reward
-                if last_win is not None and score > last_win:
-                    win_diff = score - last_win
-                last_reward = reward
-                last_win = score
-                msg = []
-                if reward_diff:
-                    msg.append(f"🎁 reward {reward}+{reward_diff}")
-                if win_diff:
-                    msg.append(f"🏆 win {score}+{win_diff}")
-                if msg:
-                    bot.send_message(chat_id, " ".join(msg))
+
+            # Fetch metrics by peer id to ensure reward/score are populated
+            try:
+                id_url = f"https://dashboard.gensyn.ai/api/v1/peer?id={quote_plus(peer_id)}"
+                r = requests.get(id_url, timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    reward = data.get("reward", 0)
+                    score = data.get("score", 0)
+                    # Alert if reward or win increased
+                    reward_diff = None
+                    win_diff = None
+                    if last_reward is not None and reward > last_reward:
+                        reward_diff = reward - last_reward
+                    if last_win is not None and score > last_win:
+                        win_diff = score - last_win
+                    last_reward = reward
+                    last_win = score
+                    msg = []
+                    if reward_diff:
+                        msg.append(f"🎁 reward {reward}+{reward_diff}")
+                    if win_diff:
+                        msg.append(f"🏆 win {score}+{win_diff}")
+                    if msg:
+                        bot.send_message(chat_id, " ".join(msg))
+            except Exception as e:
+                logging.error(f"Monitor fetch error: {str(e)}")
             time.sleep(600)  # 10 min
         except Exception as e:
             logging.error(f"Monitor error: {str(e)}")
@@ -695,46 +716,75 @@ def format_gensyn_status():
         peer_id = None
 
     peer_info_lines = []
-    if peer_name:
-        api_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(peer_name)}"
-        try:
-            r = requests.get(api_url, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                peerId = data.get("peerId") or peer_id or "?"
-                reward = data.get("reward", "?")
-                score = data.get("score", "?")
-                online = data.get("online", False)
-                # Get EQA address from smart contract (batch)
-                w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
-                contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
-                eqa = "?"
-                if peerId and peerId != "?":
-                    eoa_mapping = fetch_eoa_mapping(w3, contract, [peerId])
-                    eqa = eoa_mapping.get(peerId, "?")
+    # Prefer saved peer_id. If missing, resolve from peer_name, then fetch metrics by id.
+    resolved_peer_id = peer_id
+    resolved_peer_name = peer_name
 
-                # Pretty emoji-format status block
-                status_label = "✅ Running" if "✅" in api_status else "❌ Stopped"
-                last_txt = f"{last_activity_min}m" if last_activity_min is not None else "—"
-                join_txt = joining_round_num or "—"
-                start_txt = starting_round_str or "—"
-                pretty_lines = [
-                    f"🌐 Status → {status_label} ({last_txt})",
-                    f"🐝 Round → {join_txt} | {start_txt}",
-                    f"🎁 Reward → {reward}    🏆 Win → {score}",
-                    f"🧩 Peer → {peer_name}",
-                    f"🆔 ID → {peerId}",
-                    f"🏦 EQA → {eqa}",
-                ]
-                text = "\n".join(pretty_lines)
-                # Wrap in HTML <pre> for tap-to-copy in Telegram
-                return f"<pre>{html.escape(text)}</pre>"
+    # Resolve peer id from name if we don't have an id
+    if not resolved_peer_id and resolved_peer_name:
+        try:
+            name_url = f"https://dashboard.gensyn.ai/api/v1/peer?name={quote_plus(resolved_peer_name)}"
+            r = requests.get(name_url, timeout=10)
+            if r.status_code == 200:
+                name_data = r.json()
+                raw_peer_id = name_data.get("peerId") or ""
+                # Split composite id in format "wallet|ipfsPeerId"
+                resolved_peer_id = raw_peer_id.split("|")[-1] if "|" in raw_peer_id else raw_peer_id or None
+                resolved_peer_name = name_data.get("peerName") or resolved_peer_name
             else:
-                peer_info_lines.append(f"Peer info fetch failed: {r.status_code}")
+                peer_info_lines.append(f"Peer name lookup failed: {r.status_code}")
         except Exception as e:
-            peer_info_lines.append(f"Peer info error: {str(e)}")
+            peer_info_lines.append(f"Peer name lookup error: {str(e)}")
+
+    reward = "?"
+    score = "?"
+    online = False
+
+    # Fetch metrics by id if available
+    if resolved_peer_id:
+        try:
+            id_url = f"https://dashboard.gensyn.ai/api/v1/peer?id={quote_plus(resolved_peer_id)}"
+            s = requests.get(id_url, timeout=10)
+            if s.status_code == 200:
+                stats = s.json()
+                reward = stats.get("reward", "?")
+                score = stats.get("score", "?")
+                online = stats.get("online", False)
+            else:
+                peer_info_lines.append(f"Peer id lookup failed: {s.status_code}")
+        except Exception as e:
+            peer_info_lines.append(f"Peer id lookup error: {str(e)}")
     else:
-        peer_info_lines.append("No peer name found.")
+        if not resolved_peer_name:
+            peer_info_lines.append("No peer id or name found.")
+
+    # Get EQA address from smart contract using the resolved peer id
+    w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
+    contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
+    eqa = "?"
+    if resolved_peer_id:
+        try:
+            eoa_mapping = fetch_eoa_mapping(w3, contract, [resolved_peer_id])
+            eqa = eoa_mapping.get(resolved_peer_id, "?")
+        except Exception as e:
+            eqa = f"Error: {str(e)}"
+
+    # Pretty emoji-format status block
+    status_label = "✅ Running" if "✅" in api_status else "❌ Stopped"
+    last_txt = f"{last_activity_min}m" if last_activity_min is not None else "—"
+    join_txt = joining_round_num or "—"
+    start_txt = starting_round_str or "—"
+    pretty_lines = [
+        f"🌐 Status → {status_label} ({last_txt})",
+        f"🐝 Round → {join_txt} | {start_txt}",
+        f"🎁 Reward → {reward}    🏆 Win → {score}",
+        f"🧩 Peer → {resolved_peer_name or '—'}",
+        f"🆔 ID → {resolved_peer_id or '—'}",
+        f"🏦 EQA → {eqa}",
+    ]
+    text = "\n".join(pretty_lines)
+    # Wrap in HTML <pre> for tap-to-copy in Telegram
+    return f"<pre>{html.escape(text)}</pre>"
 
     return f"{api_status}\n\n{log_status}\n" + "\n".join(peer_info_lines)
 
