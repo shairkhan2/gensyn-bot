@@ -114,4 +114,3 @@ else
     echo "📌 To run later:"
     echo "   source venv/bin/activate && python3 /root/gensyn-bot/bot_manager.py"
 fi
-
