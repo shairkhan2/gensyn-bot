@@ -1,5 +1,86 @@
+
 monitor_active = False
 monitor_thread = None
+
+def load_eoa_mapping():
+    """Load the latest EOA mapping from cache file"""
+    try:
+        if os.path.exists(EOA_CACHE_FILE):
+            with open(EOA_CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                return data.get("mapping", {})
+        else:
+            # Create a sample EOA cache for testing if it doesn't exist
+            logging.warning(f"EOA cache file {EOA_CACHE_FILE} not found. Please ensure it's created by running Gensyn status first.")
+    except Exception as e:
+        logging.error(f"Error loading EOA mapping: {str(e)}")
+    return {}
+
+def load_seen_transactions():
+    """Load seen transaction hashes from file"""
+    try:
+        if os.path.exists(SEEN_TNX_FILE):
+            with open(SEEN_TNX_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        logging.error(f"Error loading seen transactions: {str(e)}")
+    return {}
+
+def save_seen_transactions(seen_txns):
+    """Save seen transaction hashes to file"""
+    try:
+        os.makedirs(os.path.dirname(SEEN_TNX_FILE), exist_ok=True)
+        with open(SEEN_TNX_FILE, 'w') as f:
+            json.dump(seen_txns, f, indent=2)
+    except Exception as e:
+        logging.error(f"Error saving seen transactions: {str(e)}")
+
+def check_internal_transactions(eoa):
+    """Check for internal transactions for a given EOA address"""
+    try:
+        url = f"https://gensyn-testnet.explorer.alchemy.com/api/v2/addresses/{eoa}/internal-transactions"
+        response = requests.get(url, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            # Extract transaction data - based on actual API response structure
+            # The API returns {"items": [...]} structure
+            transactions = (data.get("items", []) or 
+                           data.get("result", []) or 
+                           data.get("transactions", []) or 
+                           data.get("data", []) or
+                           [])
+            
+            logging.info(f"Found {len(transactions)} transactions for EOA {eoa}")
+            return transactions
+        else:
+            logging.warning(f"API returned status {response.status_code} for EOA {eoa}: {response.text}")
+            return []
+    except requests.exceptions.Timeout:
+        logging.error(f"Timeout checking transactions for EOA {eoa}")
+        return []
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request error checking transactions for EOA {eoa}: {str(e)}")
+        return []
+    except Exception as e:
+        logging.error(f"Error checking transactions for EOA {eoa}: {str(e)}")
+        return []
+
+def format_transaction_alert(peer_name, peer_id, eoa, new_transactions):
+    """Format simple transaction alert message with Telegram links"""
+    lines = []
+    for tx in new_transactions:
+        # Handle different possible hash field names from the API
+        tx_hash = (tx.get("transaction_hash") or 
+                   tx.get("hash") or 
+                   tx.get("transactionHash") or 
+                   "Unknown")
+        
+        # Create Telegram link format for the transaction
+        explorer_url = f"https://gensyn-testnet.explorer.alchemy.com/tx/{tx_hash}"
+        lines.append(f"💳 [New transaction]({explorer_url})")
+    
+    return "\n".join(lines)
 
 def reward_win_monitor(chat_id):
     import time
@@ -10,6 +91,10 @@ def reward_win_monitor(chat_id):
     peer_name = None
     peer_id = None
     log_dir = "/root/rl-swarm/logs"
+    
+    # Initialize seen transactions tracking
+    seen_txns = load_seen_transactions()
+    
     while True:
         global monitor_active
         if not monitor_active:
@@ -41,7 +126,11 @@ def reward_win_monitor(chat_id):
                 time.sleep(10)
                 continue
 
-            # Fetch metrics by peer id to ensure reward/score are populated
+            # Collect all alert messages for this monitoring cycle
+            reward_win_messages = []
+            transaction_messages = []
+            
+            # 1. Check reward/win changes
             try:
                 id_url = f"https://dashboard.gensyn.ai/api/v1/peer?id={quote_plus(peer_id)}"
                 r = requests.get(id_url, timeout=10)
@@ -58,15 +147,67 @@ def reward_win_monitor(chat_id):
                         win_diff = score - last_win
                     last_reward = reward
                     last_win = score
-                    msg = []
+                    
                     if reward_diff:
-                        msg.append(f"🎁 reward {reward}+{reward_diff}")
+                        reward_win_messages.append(f"🎁 reward {reward}+{reward_diff}")
                     if win_diff:
-                        msg.append(f"🏆 win {score}+{win_diff}")
-                    if msg:
-                        bot.send_message(chat_id, " ".join(msg))
+                        reward_win_messages.append(f"🏆 win {score}+{win_diff}")
             except Exception as e:
                 logging.error(f"Monitor fetch error: {str(e)}")
+
+            # 2. Check transaction monitoring for all EOAs
+            try:
+                eoa_mapping = load_eoa_mapping()
+                
+                for peer_id_key, eoa in eoa_mapping.items():
+                    if not eoa or eoa.startswith("Error"):
+                        continue
+                        
+                    # Check for new internal transactions
+                    transactions = check_internal_transactions(eoa)
+                    
+                    if transactions:
+                        # Get previously seen transactions for this EOA
+                        eoa_seen = seen_txns.get(eoa, [])
+                        new_transactions = []
+                        
+                        for tx in transactions:
+                            # Handle different possible hash field names from the API
+                            tx_hash = (tx.get("transaction_hash") or 
+                                      tx.get("hash") or 
+                                      tx.get("transactionHash") or 
+                                      "")
+                            if tx_hash and tx_hash not in eoa_seen:
+                                new_transactions.append(tx)
+                                eoa_seen.append(tx_hash)
+                        
+                        # Update seen transactions for this EOA
+                        seen_txns[eoa] = eoa_seen[-100:]  # Keep only last 100 hashes
+                        
+                        # If new transactions found, add to alert
+                        if new_transactions:
+                            tx_alert = format_transaction_alert(
+                                peer_name, peer_id_key, eoa, new_transactions
+                            )
+                            transaction_messages.append(tx_alert)
+                            
+            except Exception as e:
+                logging.error(f"Transaction monitoring error: {str(e)}")
+            
+            # Save updated seen transactions
+            save_seen_transactions(seen_txns)
+            
+            # Send separate messages for each type of event
+            if reward_diff:
+                bot.send_message(chat_id, f"🎁 reward {reward}+{reward_diff}")
+            
+            if win_diff:
+                bot.send_message(chat_id, f"🏆 win {score}+{win_diff}")
+            
+            if transaction_messages:
+                for tx_msg in transaction_messages:
+                    bot.send_message(chat_id, tx_msg, parse_mode="Markdown")
+                        
             time.sleep(600)  # 10 min
         except Exception as e:
             logging.error(f"Monitor error: {str(e)}")
@@ -81,7 +222,9 @@ import shutil
 import json
 import re
 import html
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from urllib.parse import quote_plus
+from web3 import Web3
 from telebot import TeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -97,6 +240,10 @@ WANDB_LOG_DIR = "/root/rl-swarm/logs/wandb"
 
 # Cache file for discovered peer info
 PEER_CACHE_FILE = "/root/gensyn-bot/peer_info.json"
+
+# EOA and transaction monitoring files
+EOA_CACHE_FILE = "/root/gensyn-bot/eoa_cache.json"
+SEEN_TNX_FILE = "/root/gensyn-bot/seen_tnx.json"
 
 def parse_peer_info_from_swarm_log(log_path=GENSYN_LOG_PATH):
     """
@@ -634,11 +781,7 @@ def format_gensyn_status():
     """
     import glob
     import json
-    from urllib.parse import quote_plus
-    from web3 import Web3
-    from datetime import date
 
-    EOA_CACHE_FILE = "/root/gensyn-bot/eoa_cache.json"
     ALCHEMY_RPC = "https://gensyn-testnet.g.alchemy.com/v2/TD5tr7mo4VfXlSaolFlSr3tL70br2M9J"
     CONTRACT_ADDRESS = "0xFaD7C5e93f28257429569B854151A1B8DCD404c2"
     ABI = [
@@ -762,10 +905,21 @@ def format_gensyn_status():
     w3 = Web3(Web3.HTTPProvider(ALCHEMY_RPC))
     contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
     eqa = "?"
+    transaction_count = 0
     if resolved_peer_id:
         try:
             eoa_mapping = fetch_eoa_mapping(w3, contract, [resolved_peer_id])
             eqa = eoa_mapping.get(resolved_peer_id, "?")
+            
+            # Get transaction count for the EOA
+            if eqa and not eqa.startswith("Error") and eqa != "?":
+                try:
+                    transactions = check_internal_transactions(eqa)
+                    transaction_count = len(transactions) if transactions else 0
+                except Exception as e:
+                    logging.error(f"Error getting transaction count for EOA {eqa}: {str(e)}")
+                    transaction_count = "?"
+                    
         except Exception as e:
             eqa = f"Error: {str(e)}"
 
@@ -781,6 +935,7 @@ def format_gensyn_status():
         f"🧩 Peer → {resolved_peer_name or '—'}",
         f"🆔 ID → {resolved_peer_id or '—'}",
         f"🏦 EQA → {eqa}",
+        f"💳 Transactions → {transaction_count}",
     ]
     text = "\n".join(pretty_lines)
     # Wrap in HTML <pre> for tap-to-copy in Telegram
