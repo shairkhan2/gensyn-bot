@@ -1,5 +1,7 @@
 monitor_active = False
 monitor_thread = None
+auto_restart_scheduled = False
+auto_start_enabled = False
 
 def reward_win_monitor(chat_id):
     import time
@@ -360,6 +362,7 @@ def install_gensyn(chat_id):
             bot.send_message(chat_id, f"❌ Install failed: {str(e)}")
 
 def setup_autostart(chat_id):
+    global auto_start_enabled
     try:
         os.makedirs(BACKUP_USERDATA_DIR, exist_ok=True)
         if os.path.exists(USER_DATA_PATH):
@@ -374,11 +377,11 @@ After=network.target
 Type=forking
 User=root
 WorkingDirectory=/root/rl-swarm
-ExecStartPre=/usr/bin/wg-quick up wg0
+ExecStartPre=/bin/bash -c '/usr/bin/wg-quick up wg0 || true'
 ExecStartPre=/bin/bash -c 'mkdir -p /root/rl-swarm/modal-login/temp-data && cp {BACKUP_USERDATA_DIR}/userData.json {USER_DATA_PATH} || true'
 ExecStartPre=/bin/bash -c 'cp {BACKUP_USERDATA_DIR}/userApiKey.json {USER_APIKEY_PATH} || true'
 ExecStart=/bin/bash -c 'screen -dmS gensyn bash -c "python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh"'
-ExecStopPost=/usr/bin/wg-quick down wg0
+ExecStopPost=/bin/bash -c '/usr/bin/wg-quick down wg0 || true'
 Restart=always
 RestartSec=30
 
@@ -390,7 +393,8 @@ WantedBy=multi-user.target
         subprocess.run(["systemctl", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "enable", "gensyn.service"], check=True)
         subprocess.run(["systemctl", "start", "gensyn.service"], check=True)
-        bot.send_message(chat_id, "✅ Auto-start configured! Gensyn and VPN will now start on boot.")
+        auto_start_enabled = True
+        bot.send_message(chat_id, "✅ Auto-start configured! Gensyn and VPN will now start on boot.\n🔄 Auto-restart enabled for stuck logs.")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Error setting up auto-start: {str(e)}")
 
@@ -495,6 +499,39 @@ def check_gensyn_screen_running():
     except Exception as e:
         logging.error(f"Error checking screen: {str(e)}")
         return False
+
+def auto_restart_gensyn(chat_id):
+    """
+    Auto-restart Gensyn: kill screen, restore backup, start fresh
+    """
+    try:
+        bot.send_message(chat_id, "🔄 Auto-restarting Gensyn...")
+        
+        # Kill gensyn screen (ignore if doesn't exist)
+        subprocess.run("screen -S gensyn -X quit", shell=True)
+        
+        # Restore login backup
+        backup_found = False
+        for file in ["userData.json", "userApiKey.json"]:
+            backup_path = os.path.join(SYNC_BACKUP_DIR, file)
+            target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
+            if os.path.exists(backup_path):
+                shutil.copy(backup_path, target_path)
+                backup_found = True
+        
+        # Start Gensyn in screen
+        commands = [
+            "cd /root/rl-swarm",
+            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
+        ]
+        subprocess.run("; ".join(commands), shell=True, check=True)
+        
+        if backup_found:
+            bot.send_message(chat_id, "✅ Gensyn restarted with login backup restored")
+        else:
+            bot.send_message(chat_id, "✅ Gensyn restarted")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Auto-restart failed: {str(e)}")
 
 def start_gensyn_session(chat_id, use_sync_backup=True, fresh_start=False):
     # Check if gensyn screen is already running
@@ -1039,6 +1076,11 @@ def callback_query(call):
         elif call.data == "get_backup":
             send_backup_files(call.message.chat.id)
             
+        elif call.data == "manual_restart_gensyn":
+            global auto_restart_scheduled
+            auto_restart_scheduled = False
+            threading.Thread(target=auto_restart_gensyn, args=(call.message.chat.id,), daemon=True).start()
+            
         elif call.data == "wandb_send_log":
             try:
                 # Find the most recent log file
@@ -1092,12 +1134,15 @@ def check_login_timeout(chat_id):
         bot.send_message(chat_id, "⏰ Login timed out. Please try again.")
 
 def monitor():
+    global auto_restart_scheduled
+    global auto_start_enabled
     previous_ip = ''
     previous_alive = None
     wandb_file_cache = set()
     wandb_folder_cache = set()
     last_stale_sent_ts = None
     previous_localhost_alive = None
+    restart_countdown = None
 
 
     while True:
@@ -1132,19 +1177,44 @@ def monitor():
                 bot.send_message(USER_ID, f"⚠️ API status changed: {status}")
             previous_alive = alive
 
-            # 3. Log freshness
+            # 3. Log freshness with auto-restart
             log_data = get_gensyn_log_status()
             if log_data and log_data.get("timestamp"):
                 latest_ts = log_data["timestamp"]
                 if (datetime.utcnow() - latest_ts > timedelta(minutes=240)):
                     if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
-                        bot.send_message(
-                            USER_ID,
-                            f"❗ No new Gensyn log entry since {latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC (>4h ago)!"
-                        )
-                        last_stale_sent_ts = latest_ts
+                        if auto_start_enabled:
+                            # Auto-start enabled: schedule auto-restart in 5 minutes
+                            if not auto_restart_scheduled:
+                                auto_restart_scheduled = True
+                                restart_countdown = 5
+                                bot.send_message(
+                                    USER_ID,
+                                    f"❗ Gensyn stuck for 4h! Auto-restarting in {restart_countdown} minutes..."
+                                )
+                                last_stale_sent_ts = latest_ts
+                        else:
+                            # Auto-start disabled: send manual restart button
+                            markup = InlineKeyboardMarkup()
+                            markup.add(InlineKeyboardButton("🔄 Restart", callback_data="manual_restart_gensyn"))
+                            bot.send_message(
+                                USER_ID,
+                                f"❗ Gensyn stuck for 4h! For restarting click below:",
+                                reply_markup=markup
+                            )
+                            last_stale_sent_ts = latest_ts
                 else:
                     last_stale_sent_ts = None
+                    auto_restart_scheduled = False
+                    restart_countdown = None
+            
+            # Handle auto-restart countdown
+            if auto_restart_scheduled and restart_countdown is not None:
+                restart_countdown -= 1
+                if restart_countdown <= 0:
+                    auto_restart_scheduled = False
+                    threading.Thread(target=auto_restart_gensyn, args=(USER_ID,), daemon=True).start()
+                    restart_countdown = None
 
             # 4. WANDB monitoring - simplified
             new_folders = []
