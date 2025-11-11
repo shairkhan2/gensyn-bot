@@ -374,16 +374,13 @@ Description=Gensyn Swarm Service
 After=network.target
 
 [Service]
-Type=forking
+Type=oneshot
+RemainAfterExit=yes
 User=root
-WorkingDirectory=/root/rl-swarm
+WorkingDirectory=/root/gensyn-bot
 ExecStartPre=/bin/bash -c '/usr/bin/wg-quick up wg0 || true'
-ExecStartPre=/bin/bash -c 'mkdir -p /root/rl-swarm/modal-login/temp-data && cp {BACKUP_USERDATA_DIR}/userData.json {USER_DATA_PATH} || true'
-ExecStartPre=/bin/bash -c 'cp {BACKUP_USERDATA_DIR}/userApiKey.json {USER_APIKEY_PATH} || true'
-ExecStart=/bin/bash -c 'screen -dmS gensyn bash -c "python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh"'
+ExecStart=/root/gensyn-bot/gensyn_launcher.sh
 ExecStopPost=/bin/bash -c '/usr/bin/wg-quick down wg0 || true'
-Restart=always
-RestartSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -413,6 +410,7 @@ def gensyn_soft_update(chat_id):
         # Only kill gensyn screen if present
         if check_gensyn_screen_running():
             subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+            time.sleep(3)  # Wait for screen to terminate
             bot.send_message(chat_id, "Gensyn killed.")
         else:
             bot.send_message(chat_id, "No gensyn screen found. Proceeding with update...")
@@ -429,11 +427,23 @@ def gensyn_soft_update(chat_id):
             msg = "Update done. Restarting node..."
         else:
             msg = "Update failed. Restoring backup..."
+        
+        # Ensure target directory exists
+        os.makedirs("/root/rl-swarm/modal-login/temp-data", exist_ok=True)
+        
         for filename in ["userData.json", "userApiKey.json"]:
             src = os.path.join(backup_dir, filename)
             dst = f"/root/rl-swarm/modal-login/temp-data/{filename}"
             if os.path.exists(src):
                 shutil.copy(src, dst)
+        
+        time.sleep(1)  # Wait for file system sync
+        
+        # Verify no screen exists before starting
+        if check_gensyn_screen_running():
+            bot.send_message(chat_id, "⚠️ Old screen still running, manual intervention needed")
+            return
+        
         subprocess.run("cd /root/rl-swarm && screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'", shell=True)
         bot.send_message(chat_id, f"{msg}\nGensyn started.")
     except Exception as e:
@@ -455,6 +465,7 @@ def gensyn_hard_update(chat_id):
         # Only kill gensyn screen if present
         if check_gensyn_screen_running():
             subprocess.run("screen -S gensyn -X quit", shell=True, check=True)
+            time.sleep(3)  # Wait for screen to terminate
             bot.send_message(chat_id, "Gensyn killed.")
         else:
             bot.send_message(chat_id, "No gensyn screen found. Proceeding with update...")
@@ -465,11 +476,23 @@ def gensyn_hard_update(chat_id):
             msg = "Hard update done. Restoring backup..."
         else:
             msg = "Hard update failed. Restoring backup to last state."
+        
+        # Ensure target directories exist
+        os.makedirs("/root/rl-swarm/modal-login/temp-data", exist_ok=True)
+        
         for filename in ["swarm.pem", "userData.json", "userApiKey.json"]:
             src = os.path.join(backup_dir, filename)
             dst = f"/root/rl-swarm/{filename}" if filename == "swarm.pem" else f"/root/rl-swarm/modal-login/temp-data/{filename}"
             if os.path.exists(src):
                 shutil.copy(src, dst)
+        
+        time.sleep(1)  # Wait for file system sync
+        
+        # Verify no screen exists before starting
+        if check_gensyn_screen_running():
+            bot.send_message(chat_id, "⚠️ Old screen still running, manual intervention needed")
+            return
+        
         subprocess.run("cd /root/rl-swarm && screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'", shell=True)
         bot.send_message(chat_id, f"{msg}\nGensyn started.")
     except Exception as e:
@@ -500,36 +523,139 @@ def check_gensyn_screen_running():
         logging.error(f"Error checking screen: {str(e)}")
         return False
 
+def get_screen_output(screen_name="gensyn", lines=20):
+    """
+    Capture the current visible screen output (not scrollback)
+    Returns the output as a string, or None if screen doesn't exist
+    """
+    try:
+        # Get list of screens and find the first matching one
+        result = subprocess.run("screen -ls", shell=True, capture_output=True, text=True)
+        
+        # Find the full screen identifier (PID.name)
+        screen_id = None
+        for line in result.stdout.split('\n'):
+            if f".{screen_name}" in line and "Detached" in line:
+                # Extract PID.name (e.g., "207207.gensyn")
+                parts = line.strip().split()
+                if parts:
+                    screen_id = parts[0]
+                    break
+        
+        # If no detached screen, try attached
+        if not screen_id:
+            for line in result.stdout.split('\n'):
+                if f".{screen_name}" in line and "Attached" in line:
+                    parts = line.strip().split()
+                    if parts:
+                        screen_id = parts[0]
+                        break
+        
+        if not screen_id:
+            return None
+        
+        # Create a temporary file for screen hardcopy
+        temp_file = f"/tmp/{screen_name}_capture.txt"
+        
+        # Use full screen ID to avoid ambiguity
+        result = subprocess.run(
+            f"screen -S {screen_id} -X hardcopy {temp_file}",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        
+        # Check if screen exists
+        if not os.path.exists(temp_file):
+            return None
+        
+        # Read the file
+        with open(temp_file, 'r', errors='ignore') as f:
+            content = f.read()
+        
+        # Clean up temp file
+        try:
+            os.remove(temp_file)
+        except:
+            pass
+        
+        return content.strip()
+    except Exception as e:
+        logging.error(f"Error capturing screen output: {str(e)}")
+        return None
+
+def create_screen_image(screen_name="gensyn"):
+    """
+    Capture screen output and convert to an image
+    Returns path to image file, or None if failed
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        
+        # Get screen output
+        output = get_screen_output(screen_name, lines=50)
+        if not output:
+            return None
+        
+        # Image settings
+        font_size = 14
+        line_height = 18
+        padding = 20
+        bg_color = (0, 0, 0)  # Black background
+        text_color = (0, 255, 0)  # Green text (terminal style)
+        
+        # Try to use monospace font
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
+        
+        # Split into lines and calculate image size
+        lines = output.split('\n')
+        max_width = max(len(line) for line in lines) if lines else 80
+        img_width = max_width * (font_size - 4) + (padding * 2)
+        img_height = len(lines) * line_height + (padding * 2)
+        
+        # Create image
+        img = Image.new('RGB', (img_width, img_height), bg_color)
+        draw = ImageDraw.Draw(img)
+        
+        # Draw text
+        y = padding
+        for line in lines:
+            draw.text((padding, y), line, fill=text_color, font=font)
+            y += line_height
+        
+        # Save image
+        img_path = f"/tmp/{screen_name}_screenshot.png"
+        img.save(img_path)
+        
+        return img_path
+    except Exception as e:
+        logging.error(f"Error creating screen image: {str(e)}")
+        return None
+
 def auto_restart_gensyn(chat_id):
     """
-    Auto-restart Gensyn: kill screen, restore backup, start fresh
+    Auto-restart Gensyn: uses safe launcher script to prevent multiple screens
     """
     try:
         bot.send_message(chat_id, "🔄 Auto-restarting Gensyn...")
         
-        # Kill gensyn screen (ignore if doesn't exist)
-        subprocess.run("screen -S gensyn -X quit", shell=True)
+        # Use the safe launcher script
+        result = subprocess.run(
+            "/root/gensyn-bot/gensyn_launcher.sh",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
         
-        # Restore login backup
-        backup_found = False
-        for file in ["userData.json", "userApiKey.json"]:
-            backup_path = os.path.join(SYNC_BACKUP_DIR, file)
-            target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
-            if os.path.exists(backup_path):
-                shutil.copy(backup_path, target_path)
-                backup_found = True
-        
-        # Start Gensyn in screen
-        commands = [
-            "cd /root/rl-swarm",
-            "screen -dmS gensyn bash -c 'python3 -m venv .venv && source .venv/bin/activate && ./run_rl_swarm.sh'"
-        ]
-        subprocess.run("; ".join(commands), shell=True, check=True)
-        
-        if backup_found:
-            bot.send_message(chat_id, "✅ Gensyn restarted with login backup restored")
+        if result.returncode == 0:
+            bot.send_message(chat_id, "✅ Gensyn restarted successfully with backup restored")
         else:
-            bot.send_message(chat_id, "✅ Gensyn restarted")
+            error_msg = result.stderr[-500:] if result.stderr else "Unknown error"
+            bot.send_message(chat_id, f"❌ Auto-restart failed: {error_msg}")
+            logging.error(f"Launcher failed: {result.stderr}")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Auto-restart failed: {str(e)}")
 
@@ -544,6 +670,8 @@ def start_gensyn_session(chat_id, use_sync_backup=True, fresh_start=False):
         bot.send_message(chat_id, "🚀 Starting fresh node. swarm.pem will be generated automatically...")
         backup_found = False
         if use_sync_backup:
+            # Ensure target directory exists
+            os.makedirs(os.path.dirname(USER_DATA_PATH), exist_ok=True)
             for file in ["userData.json", "userApiKey.json"]:
                 backup_path = os.path.join(SYNC_BACKUP_DIR, file)
                 target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
@@ -576,6 +704,8 @@ def start_gensyn_session(chat_id, use_sync_backup=True, fresh_start=False):
     try:
         backup_found = False
         if use_sync_backup:
+            # Ensure target directory exists
+            os.makedirs(os.path.dirname(USER_DATA_PATH), exist_ok=True)
             for file in ["userData.json", "userApiKey.json"]:
                 backup_path = os.path.join(SYNC_BACKUP_DIR, file)
                 target_path = USER_DATA_PATH if file == "userData.json" else USER_APIKEY_PATH
@@ -859,7 +989,27 @@ def gensyn_status_handler(message):
         return
     try:
         status_message = format_gensyn_status()
-        bot.send_message(message.chat.id, status_message, parse_mode="HTML")
+        status_msg = bot.send_message(message.chat.id, status_message, parse_mode="HTML")
+        
+        # Send screen output screenshot as image (reply to status message)
+        if check_gensyn_screen_running():
+            img_path = create_screen_image("gensyn")
+            if img_path and os.path.exists(img_path):
+                with open(img_path, 'rb') as photo:
+                    bot.send_photo(
+                        message.chat.id, 
+                        photo, 
+                        caption="📺 Gensyn Screen Output",
+                        reply_to_message_id=status_msg.message_id
+                    )
+                try:
+                    os.remove(img_path)
+                except:
+                    pass
+            else:
+                bot.send_message(message.chat.id, "⚠️ Could not capture screen output", reply_to_message_id=status_msg.message_id)
+        else:
+            bot.send_message(message.chat.id, "⚠️ Gensyn screen not running", reply_to_message_id=status_msg.message_id)
     except Exception as e:
         logging.error(f"Error in gensyn_status_handler: {str(e)}")
         bot.send_message(message.chat.id, "❌ Error getting status. Check logs.")
@@ -940,7 +1090,27 @@ def callback_query(call):
             try:
                 status_message = format_gensyn_status()
                 markup = get_menu()
-                bot.send_message(call.message.chat.id, status_message, parse_mode="HTML", reply_markup=markup)
+                status_msg = bot.send_message(call.message.chat.id, status_message, parse_mode="HTML", reply_markup=markup)
+                
+                # Send screen output screenshot as image (reply to status message)
+                if check_gensyn_screen_running():
+                    img_path = create_screen_image("gensyn")
+                    if img_path and os.path.exists(img_path):
+                        with open(img_path, 'rb') as photo:
+                            bot.send_photo(
+                                call.message.chat.id, 
+                                photo, 
+                                caption="📺 Gensyn Screen Output",
+                                reply_to_message_id=status_msg.message_id
+                            )
+                        try:
+                            os.remove(img_path)
+                        except:
+                            pass
+                    else:
+                        bot.send_message(call.message.chat.id, "⚠️ Could not capture screen output", reply_to_message_id=status_msg.message_id)
+                else:
+                    bot.send_message(call.message.chat.id, "⚠️ Gensyn screen not running", reply_to_message_id=status_msg.message_id)
             except Exception as e:
                 logging.error(f"Error in gensyn_status callback: {str(e)}")
                 bot.send_message(call.message.chat.id, "❌ Error getting status. Check logs.")
@@ -1143,6 +1313,12 @@ def monitor():
     last_stale_sent_ts = None
     previous_localhost_alive = None
     restart_countdown = None
+    
+    # Screen output monitoring variables
+    previous_screen_output = None
+    screen_frozen_since = None
+    screen_check_counter = 0  # Check every 5 cycles (5 minutes)
+    last_screen_missing_alert = None  # Prevent spam when screen missing
 
 
     while True:
@@ -1181,7 +1357,7 @@ def monitor():
             log_data = get_gensyn_log_status()
             if log_data and log_data.get("timestamp"):
                 latest_ts = log_data["timestamp"]
-                if (datetime.utcnow() - latest_ts > timedelta(minutes=240)):
+                if (datetime.utcnow() - latest_ts > timedelta(minutes=120)):
                     if not last_stale_sent_ts or last_stale_sent_ts != latest_ts:
                         if auto_start_enabled:
                             # Auto-start enabled: schedule auto-restart in 5 minutes
@@ -1190,7 +1366,7 @@ def monitor():
                                 restart_countdown = 5
                                 bot.send_message(
                                     USER_ID,
-                                    f"❗ Gensyn stuck for 4h! Auto-restarting in {restart_countdown} minutes..."
+                                    f"❗ Gensyn logs stuck for 2h! Auto-restarting in {restart_countdown} minutes..."
                                 )
                                 last_stale_sent_ts = latest_ts
                         else:
@@ -1199,7 +1375,7 @@ def monitor():
                             markup.add(InlineKeyboardButton("🔄 Restart", callback_data="manual_restart_gensyn"))
                             bot.send_message(
                                 USER_ID,
-                                f"❗ Gensyn stuck for 4h! For restarting click below:",
+                                f"❗ Gensyn logs stuck for 2h! For restarting click below:",
                                 reply_markup=markup
                             )
                             last_stale_sent_ts = latest_ts
@@ -1215,6 +1391,80 @@ def monitor():
                     auto_restart_scheduled = False
                     threading.Thread(target=auto_restart_gensyn, args=(USER_ID,), daemon=True).start()
                     restart_countdown = None
+            
+            # 3b. Screen output monitoring (frozen process detection)
+            screen_check_counter += 1
+            if screen_check_counter >= 5:  # Check every 5 minutes (5 * 60s cycles)
+                screen_check_counter = 0
+                
+                if check_gensyn_screen_running():
+                    current_output = get_screen_output("gensyn", 20)
+                    
+                    if current_output is not None:
+                        if previous_screen_output is not None:
+                            # Compare current output with previous
+                            if current_output == previous_screen_output:
+                                # Output hasn't changed
+                                if screen_frozen_since is None:
+                                    screen_frozen_since = datetime.utcnow()
+                                else:
+                                    # Check how long it's been frozen
+                                    frozen_duration = datetime.utcnow() - screen_frozen_since
+                                    if frozen_duration > timedelta(minutes=30):
+                                        # Frozen for 30+ minutes, trigger restart
+                                        if not auto_restart_scheduled:
+                                            if auto_start_enabled:
+                                                auto_restart_scheduled = True
+                                                restart_countdown = 5
+                                                bot.send_message(
+                                                    USER_ID,
+                                                    f"❗ Gensyn process frozen for 30min! Auto-restarting in {restart_countdown} minutes..."
+                                                )
+                                            else:
+                                                markup = InlineKeyboardMarkup()
+                                                markup.add(InlineKeyboardButton("🔄 Restart", callback_data="manual_restart_gensyn"))
+                                                bot.send_message(
+                                                    USER_ID,
+                                                    f"❗ Gensyn process frozen for 30min! For restarting click below:",
+                                                    reply_markup=markup
+                                                )
+                                            screen_frozen_since = None  # Reset to avoid spam
+                            else:
+                                # Output changed, reset frozen timer
+                                screen_frozen_since = None
+                        
+                        previous_screen_output = current_output
+                else:
+                    # Screen not running - check if it crashed
+                    now = datetime.utcnow()
+                    # Only alert once every 10 minutes to prevent spam
+                    should_alert = (last_screen_missing_alert is None or 
+                                   (now - last_screen_missing_alert) > timedelta(minutes=10))
+                    
+                    if should_alert:
+                        if auto_start_enabled and not auto_restart_scheduled:
+                            # Auto-start enabled: restart immediately
+                            auto_restart_scheduled = True
+                            last_screen_missing_alert = now
+                            bot.send_message(
+                                USER_ID,
+                                "❗ Gensyn screen missing (crashed)! Auto-restarting with backup..."
+                            )
+                            threading.Thread(target=auto_restart_gensyn, args=(USER_ID,), daemon=True).start()
+                        else:
+                            # Auto-start disabled: send manual restart button
+                            last_screen_missing_alert = now
+                            markup = InlineKeyboardMarkup()
+                            markup.add(InlineKeyboardButton("🔄 Restart", callback_data="manual_restart_gensyn"))
+                            bot.send_message(
+                                USER_ID,
+                                "❗ Gensyn screen missing (crashed)! For restarting click below:",
+                                reply_markup=markup
+                            )
+                    
+                    # Reset monitoring
+                    previous_screen_output = None
+                    screen_frozen_since = None
 
             # 4. WANDB monitoring - simplified
             new_folders = []
@@ -1245,6 +1495,91 @@ def monitor():
         except Exception as e:
             logging.error("Monitor error: %s", str(e))
             time.sleep(10)
+
+def auto_restore_from_telegram():
+    """
+    Auto-restore backup files from Telegram chat history
+    Searches for swarm.pem, userData.json, userApiKey.json in chat
+    """
+    try:
+        logging.info("Checking for backup files in Telegram...")
+        
+        # Files to search for
+        target_files = {
+            "swarm.pem": SWARM_PEM_PATH,
+            "userData.json": USER_DATA_PATH,
+            "userApiKey.json": USER_APIKEY_PATH
+        }
+        
+        restored_files = []
+        
+        # Get recent updates (last 100 messages)
+        try:
+            updates = bot.get_updates(limit=100, timeout=10)
+        except Exception as e:
+            logging.error(f"Failed to get updates: {str(e)}")
+            return
+        
+        # Search through messages for documents
+        for update in reversed(updates):  # Start from oldest
+            if not update.message:
+                continue
+            
+            message = update.message
+            
+            # Only process messages from the authorized user
+            if message.from_user.id != USER_ID:
+                continue
+            
+            # Check if message has a document
+            if not message.document:
+                continue
+            
+            file_name = message.document.file_name
+            
+            # Check if this is one of our target files
+            if file_name in target_files and file_name not in restored_files:
+                target_path = target_files[file_name]
+                
+                # Skip if file already exists locally
+                if os.path.exists(target_path):
+                    logging.info(f"Skipping {file_name} - already exists locally")
+                    continue
+                
+                try:
+                    # Download the file
+                    file_info = bot.get_file(message.document.file_id)
+                    file_data = bot.download_file(file_info.file_path)
+                    
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    
+                    # Save the file
+                    with open(target_path, 'wb') as f:
+                        f.write(file_data)
+                    
+                    restored_files.append(file_name)
+                    logging.info(f"✅ Restored {file_name} from Telegram")
+                    
+                except Exception as e:
+                    logging.error(f"Failed to restore {file_name}: {str(e)}")
+        
+        # Notify user if files were restored
+        if restored_files:
+            files_list = ", ".join(restored_files)
+            bot.send_message(
+                USER_ID,
+                f"✅ Auto-restored from Telegram backup:\n{files_list}\n\nBot is ready!"
+            )
+            logging.info(f"Auto-restored: {files_list}")
+        else:
+            logging.info("No backup files found in Telegram chat history")
+            
+    except Exception as e:
+        logging.error(f"Auto-restore failed: {str(e)}")
+
+# Auto-restore backup files from Telegram on startup
+auto_restore_from_telegram()
 
 threading.Thread(target=monitor, daemon=True).start()
 

@@ -22,6 +22,16 @@ fi
 cd "$HOME/gensyn-bot/" || { echo "Failed to cd into $HOME/gensyn-bot"; exit 1; }
 wget https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/bot.py -O bot.py
 
+# Install/update Pillow in virtual environment
+echo "Installing Pillow..."
+if [ -d ".venv" ]; then
+    source .venv/bin/activate
+    pip install --upgrade Pillow
+    deactivate
+else
+    echo "Warning: Virtual environment not found, skipping Pillow install"
+fi
+
 # Enable and start the bot.service
 echo "Enabling and starting bot.service..."
 systemctl enable bot.service

@@ -61,7 +61,8 @@ pip install \
     python-dotenv==1.0.1 \
     requests==2.32.3 \
     playwright==1.44.0 \
-    web3
+    web3 \
+    Pillow
 
 # Optionally update requirements.txt for future reference
 echo "pyTelegramBotAPI==4.13.0
@@ -69,6 +70,7 @@ python-dotenv==1.0.1
 requests==2.32.3
 playwright==1.44.0
 web3
+Pillow
 " > requirements.txt
 
 # Install Playwright browsers

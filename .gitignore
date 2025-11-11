@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+backup-userdata/
+sync-backup/
+*.json
+*.log
