@@ -215,7 +215,8 @@ def get_menu():
         InlineKeyboardButton(terminal_label, callback_data="toggle_tmate")
     )
     markup.row(
-        InlineKeyboardButton("🗂️ Get Backup", callback_data="get_backup")
+        InlineKeyboardButton("🗂️ Get Backup", callback_data="get_backup"),
+        InlineKeyboardButton("📥 Restore Backup", callback_data="restore_backup")
     )
     markup.row(
         InlineKeyboardButton("🔄 Update", callback_data="update_menu")
@@ -1246,6 +1247,9 @@ def callback_query(call):
         elif call.data == "get_backup":
             send_backup_files(call.message.chat.id)
             
+        elif call.data == "restore_backup":
+            threading.Thread(target=restore_from_telegram_backup, args=(call.message.chat.id,), daemon=True).start()
+            
         elif call.data == "manual_restart_gensyn":
             global auto_restart_scheduled
             auto_restart_scheduled = False
@@ -1281,20 +1285,53 @@ def callback_query(call):
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     global waiting_for_pem
-    if message.from_user.id != USER_ID or not waiting_for_pem:
+    if message.from_user.id != USER_ID:
         return
-    try:
-        file_info = bot.get_file(message.document.file_id)
-        file_data = bot.download_file(file_info.file_path)
-        os.makedirs(os.path.dirname(SWARM_PEM_PATH), exist_ok=True)
-        with open(SWARM_PEM_PATH, 'wb') as f:
-            f.write(file_data)
-        waiting_for_pem = False
-        bot.send_message(message.chat.id, "✅ swarm.pem saved! Starting Gensyn...")
-        start_gensyn_session(message.chat.id, use_sync_backup=False)
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Error saving file: {str(e)}")
-        waiting_for_pem = False
+    
+    file_name = message.document.file_name
+    
+    # Auto-save backup files
+    backup_files = {
+        "swarm.pem": SWARM_PEM_PATH,
+        "userData.json": USER_DATA_PATH,
+        "userApiKey.json": USER_APIKEY_PATH
+    }
+    
+    if file_name in backup_files:
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            file_data = bot.download_file(file_info.file_path)
+            target_path = backup_files[file_name]
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, 'wb') as f:
+                f.write(file_data)
+            bot.send_message(message.chat.id, f"✅ {file_name} saved successfully!")
+            logging.info(f"Auto-saved backup file: {file_name}")
+            
+            # If it was swarm.pem and we were waiting for it, start Gensyn
+            if file_name == "swarm.pem" and waiting_for_pem:
+                waiting_for_pem = False
+                bot.send_message(message.chat.id, "Starting Gensyn...")
+                start_gensyn_session(message.chat.id, use_sync_backup=False)
+                
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Error saving {file_name}: {str(e)}")
+            if file_name == "swarm.pem":
+                waiting_for_pem = False
+    elif waiting_for_pem:
+        # Unknown file but we're waiting for swarm.pem
+        try:
+            file_info = bot.get_file(message.document.file_id)
+            file_data = bot.download_file(file_info.file_path)
+            os.makedirs(os.path.dirname(SWARM_PEM_PATH), exist_ok=True)
+            with open(SWARM_PEM_PATH, 'wb') as f:
+                f.write(file_data)
+            waiting_for_pem = False
+            bot.send_message(message.chat.id, "✅ swarm.pem saved! Starting Gensyn...")
+            start_gensyn_session(message.chat.id, use_sync_backup=False)
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Error saving file: {str(e)}")
+            waiting_for_pem = False
 
 def check_login_timeout(chat_id):
     global login_in_progress
@@ -1496,90 +1533,44 @@ def monitor():
             logging.error("Monitor error: %s", str(e))
             time.sleep(10)
 
-def auto_restore_from_telegram():
+def restore_from_telegram_backup(chat_id):
     """
-    Auto-restore backup files from Telegram chat history
-    Searches for swarm.pem, userData.json, userApiKey.json in chat
+    Instructs user to send backup files which will be auto-processed
     """
     try:
-        logging.info("Checking for backup files in Telegram...")
+        # Check which files are missing
+        missing_files = []
+        if not os.path.exists(SWARM_PEM_PATH):
+            missing_files.append("swarm.pem")
+        if not os.path.exists(USER_DATA_PATH):
+            missing_files.append("userData.json")
+        if not os.path.exists(USER_APIKEY_PATH):
+            missing_files.append("userApiKey.json")
         
-        # Files to search for
-        target_files = {
-            "swarm.pem": SWARM_PEM_PATH,
-            "userData.json": USER_DATA_PATH,
-            "userApiKey.json": USER_APIKEY_PATH
-        }
-        
-        restored_files = []
-        
-        # Get recent updates (last 100 messages)
-        try:
-            updates = bot.get_updates(limit=100, timeout=10)
-        except Exception as e:
-            logging.error(f"Failed to get updates: {str(e)}")
+        if not missing_files:
+            bot.send_message(
+                chat_id,
+                "✅ All backup files already exist:\n"
+                f"• swarm.pem\n"
+                f"• userData.json\n"
+                f"• userApiKey.json\n\n"
+                "No restore needed!"
+            )
             return
         
-        # Search through messages for documents
-        for update in reversed(updates):  # Start from oldest
-            if not update.message:
-                continue
-            
-            message = update.message
-            
-            # Only process messages from the authorized user
-            if message.from_user.id != USER_ID:
-                continue
-            
-            # Check if message has a document
-            if not message.document:
-                continue
-            
-            file_name = message.document.file_name
-            
-            # Check if this is one of our target files
-            if file_name in target_files and file_name not in restored_files:
-                target_path = target_files[file_name]
-                
-                # Skip if file already exists locally
-                if os.path.exists(target_path):
-                    logging.info(f"Skipping {file_name} - already exists locally")
-                    continue
-                
-                try:
-                    # Download the file
-                    file_info = bot.get_file(message.document.file_id)
-                    file_data = bot.download_file(file_info.file_path)
-                    
-                    # Ensure directory exists
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                    
-                    # Save the file
-                    with open(target_path, 'wb') as f:
-                        f.write(file_data)
-                    
-                    restored_files.append(file_name)
-                    logging.info(f"✅ Restored {file_name} from Telegram")
-                    
-                except Exception as e:
-                    logging.error(f"Failed to restore {file_name}: {str(e)}")
-        
-        # Notify user if files were restored
-        if restored_files:
-            files_list = ", ".join(restored_files)
-            bot.send_message(
-                USER_ID,
-                f"✅ Auto-restored from Telegram backup:\n{files_list}\n\nBot is ready!"
-            )
-            logging.info(f"Auto-restored: {files_list}")
-        else:
-            logging.info("No backup files found in Telegram chat history")
+        missing_list = "\n".join([f"❌ {f}" for f in missing_files])
+        bot.send_message(
+            chat_id,
+            f"📥 **Restore Backup Files**\n\n"
+            f"Missing files:\n{missing_list}\n\n"
+            f"📤 Please send me these files as documents.\n"
+            f"I'll automatically save them to the correct locations!\n\n"
+            f"💡 Tip: Use '🗂️ Get Backup' button to download files from another VPS first."
+        )
             
     except Exception as e:
-        logging.error(f"Auto-restore failed: {str(e)}")
-
-# Auto-restore backup files from Telegram on startup
-auto_restore_from_telegram()
+        logging.error(f"Restore from Telegram failed: {str(e)}")
+        bot.send_message(chat_id, f"❌ Restore failed: {str(e)}")
 
 threading.Thread(target=monitor, daemon=True).start()
 
