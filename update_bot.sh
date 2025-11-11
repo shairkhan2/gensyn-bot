@@ -22,6 +22,16 @@ fi
 cd "$HOME/gensyn-bot/" || { echo "Failed to cd into $HOME/gensyn-bot"; exit 1; }
 wget https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/bot.py -O bot.py
 
+# Download gensyn_launcher.sh
+echo "Downloading gensyn_launcher.sh..."
+wget https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/gensyn_launcher.sh -O gensyn_launcher.sh
+chmod +x gensyn_launcher.sh
+
+# Download gensyn_watchdog.sh
+echo "Downloading gensyn_watchdog.sh..."
+wget https://raw.githubusercontent.com/shairkhan2/gensyn-bot/refs/heads/main/gensyn_watchdog.sh -O gensyn_watchdog.sh
+chmod +x gensyn_watchdog.sh
+
 # Install/update Pillow in virtual environment
 echo "Installing Pillow..."
 if [ -d ".venv" ]; then
